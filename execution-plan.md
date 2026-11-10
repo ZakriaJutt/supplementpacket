@@ -249,12 +249,12 @@ The chat's build figure is 160 hours, 20 days [C], for "two estimate PDFs → di
 
 | Proposed command | Purpose | Inputs | Outputs | Failure behaviour |
 |---|---|---|---|---|
-| `make dev` | Start database, storage, api, worker, web, mail catcher | None | Health summary | Exits non-zero naming the unhealthy service |
-| `make test` | Unit and integration tests | Test database | Report | Non-zero on any failure |
-| `scripts/check_boundaries.py` | Enforce import rules | Source tree | List of violations | Non-zero if any |
-| `scripts/check_migration_heads.py` | One linear migration history | Migrations folder | Head count | Non-zero if more than one |
-| `scripts/orm_parity.py` | Compare migrated schema with ORM metadata | Two scratch databases | Diff | Non-zero on any difference |
-| `scripts/seed_synthetic.py` | Two synthetic tenants with ROs and PDFs | Seed number | Rows and files | Idempotent; safe to rerun |
+| `make dev` | Start database, storage, api, worker, web, mail catcher (B1: exists for database, api and worker; see [AGENTS section 11](AGENTS.md#11-utilities-index-b1)) | None | Health summary | Exits non-zero naming the unhealthy service |
+| `make test` (exists, B1) | Unit and integration tests; drops and re-migrates the test database first | Test database | Report | Non-zero on any failure |
+| `scripts/check_boundaries.py` (exists, B1) | Enforce import rules | Source tree | List of violations | Non-zero if any |
+| `scripts/check_migration_heads.py` (exists, B1) | One linear migration history | Migrations folder | Head count | Non-zero if more than one |
+| `scripts/orm_parity.py` (exists, B1) | Compare migrated schema with ORM metadata | Migrated test database (B1; two scratch databases are not allowed on the build machine) | Diff | Non-zero on any difference |
+| `scripts/seed_synthetic.py` (exists, B1: tenants, users, sessions, pilot, a synthetic checklist; no ROs or PDFs) | Two synthetic tenants with ROs and PDFs | Seed number | Rows and files | Idempotent; safe to rerun |
 | `scripts/run_backfill.py NAME` | Batched, resumable backfill | Backfill name | Progress row | Stops on error; rerun continues |
 | `scripts/restore_drill.sh` | Restore to a new instance and verify | Restore time | Row counts, hash check | Non-zero on mismatch; never touches production |
 | `scripts/replay_deletions.py` | Reapply deletions after a restore | Restore time | Purged tenants and objects | Resumable |
@@ -263,7 +263,7 @@ The chat's build figure is 160 hours, 20 days [C], for "two estimate PDFs → di
 
 ## 7. Test catalogue
 
-All **Not run**. Fixtures are synthetic.
+Fixtures are synthetic. The result of every test is recorded only in [verification-report-fixing.md section 9](verification-report-fixing.md#9-build-milestone-b1-2026-11-11); tests not listed there are **Not run**.
 
 ### 7.1 Unit tests
 

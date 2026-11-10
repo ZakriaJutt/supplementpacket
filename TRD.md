@@ -1,6 +1,6 @@
 # TRD — SupplementPacket
 
-arc42 order. Everything here is **proposed**; no implementation exists and every command is labelled proposed. Labels are defined in [Decision.md section 0](Decision.md#0-how-numbers-are-labelled). Requirements are in [PRD section 6](PRD.md#6-must-haves); risks `R-nn` are in [verification-report-fixing.md section 5](verification-report-fixing.md#5-production-risk-register).
+arc42 order. Everything here is **proposed** unless marked *B1*: build milestone B1 (2026-11-11) implements the API core path, the worker, the database and the packages named in [AGENTS section 11](AGENTS.md#11-utilities-index-b1); everything else is still proposed. Labels are defined in [Decision.md section 0](Decision.md#0-how-numbers-are-labelled). Requirements are in [PRD section 6](PRD.md#6-must-haves); risks `R-nn` are in [verification-report-fixing.md section 5](verification-report-fixing.md#5-production-risk-register).
 
 ## 1. Introduction and goals
 
@@ -156,7 +156,7 @@ The same refusal covers the other ways a packet could differ from what the Estim
 
 | Aspect | Local | Staging | Production |
 |---|---|---|---|
-| Start | One proposed command, `make dev`: database, MinIO, api, worker, web, mail catcher, with health checks (R-17) | Containers on the founder's VPS | Containers on the VM; managed database; S3 |
+| Start | One command, `make dev`: database, MinIO, api, worker, web, mail catcher, with health checks (R-17). *B1 on the build machine: no Docker, so `make dev` uses the running PostgreSQL 16, starts api (port 8103) and worker directly, stores objects in `.run/storage`, and has no MinIO, web or mail catcher; Redis is not used (AD-03)* | Containers on the founder's VPS | Containers on the VM; managed database; S3 |
 | Data | Synthetic fixtures only | Synthetic only | Customer data |
 | AI | Recorded fixtures, no network | Provider sandbox key | Off until a tenant Owner consents |
 | Email | Mail catcher | Restricted recipient list | Transactional provider |
@@ -180,16 +180,16 @@ REST under `/api/v1`, JSON, errors as RFC 9457 problem documents. Mutations acce
 | Auth | `POST /auth/login`, `/auth/totp`, `/auth/logout`, `/auth/password-reset`, `/invites/{token}/accept` | MH-10 |
 | ROs | `GET, POST /ros`, `GET, PATCH /ros/{id}` | MH-01 |
 | Documents | `POST /ros/{id}/documents`, `GET /documents/{id}`, `GET /jobs/{id}`, `POST /jobs/{id}/retry` | MH-01, MH-12 |
-| Parse | `GET /documents/{id}/lines`, `PATCH /estimate-lines/{id}`, `POST /documents/{id}/reconcile` | MH-02 |
+| Parse | `GET /documents/{id}/lines`, `POST /documents/{id}/manual-lines` (manual entry fallback, B1), `PATCH /estimate-lines/{id}`, `POST /documents/{id}/reconcile` | MH-02 |
 | Lines | `POST /ros/{id}/diff`, `GET, POST /ros/{id}/lines`, `PATCH /lines/{id}`, `POST /lines/{id}/approve`, `POST /lines/{id}/exclude`, `GET /checklist` | MH-03, MH-04, MH-06 |
-| Evidence | `POST /lines/{id}/photos` (attestation required), `POST /lines/{id}/references`, `PATCH /references/{id}`, `DELETE /evidence/{id}`; each resets the line's approval | MH-05, MH-06 |
-| Packets | `GET /ros/{id}/packet-review` (returns the review fingerprint), `POST /ros/{id}/packets` (must carry that fingerprint), `GET /packets/{id}`, `GET /packets/{id}/pdf`, `POST /packets/{id}/mark-sent`, `POST /packets/{id}/unmark-sent` | MH-06, MH-07 |
-| Ledger | `PUT /packet-lines/{id}/response`, `POST /packets/{id}/response-documents`, `POST /packets/{id}/remittance-documents`, `POST /ros/{id}/payments` (a supplement payment names its packet), `POST /payments/{id}/reverse`, `GET /tracker` | MH-08 |
-| Pilot | `GET, POST /baseline-ros`, `PATCH /pilot/counts` (the two insurer-paid RO counts), `GET /pilot/report` | MH-09 |
+| Evidence | `POST /lines/{id}/photos` (attestation required), `POST /lines/{id}/references`, `PATCH /references/{id}`, `PATCH /photos/{id}` (attestation answers, B1), `DELETE /evidence/{id}`; each resets the line's approval | MH-05, MH-06 |
+| Packets | `GET /ros/{id}/packet-review` (returns the review fingerprint), `POST /ros/{id}/packets` (must carry that fingerprint and, in B1, the per-item components it was computed from, so a 409 can list what changed), `GET /packets/{id}`, `GET /packets/{id}/pdf` (returns a 5-minute signed link to `GET /packets/{id}/pdf/download`, B1), `POST /packets/{id}/mark-sent`, `POST /packets/{id}/unmark-sent` | MH-06, MH-07 |
+| Ledger | `PUT /packet-lines/{id}/response`, `POST /packets/{id}/response-documents`, `POST /packets/{id}/remittance-documents`, `POST /ros/{id}/payments` (a supplement payment names its packet), `POST /payments/{id}/reverse` (full or partial, B1), `GET /ros/{id}/ledger` (B1), `GET /tracker` | MH-08 |
+| Pilot | `GET, POST /baseline-ros`, `PATCH /pilots/{id}/counts` (the two baseline counts and the window count), `GET /pilots/{id}/report` (B1: the pilot is named in the path because a tenant can have one pilot per location) | MH-09 |
 | Admin | `GET, PATCH /settings`, `GET, POST /users`, `GET, POST /locations`, `GET, POST /insurers`, `GET /audit`, `POST /exports`, `POST /packets/{id}/takedown`, `POST /deletion-requests`, `POST /operator-grants` | MH-10, MH-11 |
 | Provisioning (vendor Operator only) | `POST /operator/tenants` (tenant, first location, Owner invitation), `POST /operator/pilots` | MH-10 |
 
-There is deliberately no endpoint that transmits to an insurer.
+There is deliberately no endpoint that transmits to an insurer. *B1 implements the ROs, Documents, Parse, Lines, Evidence, Packets and Ledger rows (except `GET /tracker`) and the Pilot row; Auth, Admin and Provisioning are not implemented, and B1 sessions are created by the seed script and test fixtures (T-2.2.2, T-2.2.3 not done). IT-01 iterates the route inventory, so every new endpoint is covered automatically.*
 
 ### 8.2 Identity
 
@@ -212,6 +212,7 @@ Typed settings from environment variables, validated at start; the process refus
 | `render_packet` | Freeze | 120 s | 3; packet stays frozen, PDF pending | Keyed by packet id; same snapshot gives the same hash |
 | `build_export` | Owner request | 15 min | 1 | Keyed by request id |
 | `retention_sweep` | Daily | 30 min | Next day | Deletes by listing prefixes and rows past expiry; resumable |
+| `takedown_purge` (B1) | Owner takedown | 120 s | 3 | Keyed by packet id; deletes only keys under the job's tenant prefix, listed at takedown time |
 
 Job rows carry `state`, `state_version`, `attempt`, `locked_until`, `correlation_id`. Transitions are compare-and-set on `state_version`; a late or duplicate completion that finds a higher version is discarded and logged (R-01). A browser timeout changes nothing: the job continues and the client reads `GET /jobs/{id}`; repeating the upload with the same `Idempotency-Key` returns the original job (R-02). A sweeper returns jobs whose `locked_until` has passed to `queued`.
 

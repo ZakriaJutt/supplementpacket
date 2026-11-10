@@ -7,7 +7,7 @@ This file separates what was checked on the documents from what can only be chec
 | Item | Status |
 |---|---|
 | Ten planning files written | Yes, 2026-11-10; revised in fix round 1 |
-| Application | Does not exist. Every application check is `Not run` |
+| Application | Build milestone B1 (foundation and deterministic core) implemented on 2026-11-11 on branch `feat/b1-foundation`, authorised by the owner before the Phase 0 gate G1. Tests that ran are recorded in [section 9](#9-build-milestone-b1-2026-11-11); every other application check is `Not run` |
 | Customer evidence | None. No interview, no message sent, no pilot |
 | Review | Independent review round 1: 16 findings (0 blocker, 10 major, 6 minor), all answered in [section 6](#6-findings-register). Retest on 2026-11-11 (`supplementpacket-round2.md`): 9 closed, 7 closed with a part open, 0 still open, no new findings. Residues named at that retest were edited afterwards and checked by the lead only. Verdicts transcribed into section 6 by the lead, unchanged |
 | Highest-consequence failure | **An unapproved or unsupported line reaches an insurer** ([PRD section 9](PRD.md#9-highest-cost-user-mistake)) |
@@ -32,18 +32,18 @@ This file separates what was checked on the documents from what can only be chec
 
 ## 3. Application checks planned
 
-All `Not run`. Definitions are in the [test catalogue](execution-plan.md#7-test-catalogue).
+Definitions are in the [test catalogue](execution-plan.md#7-test-catalogue). Results of the tests that ran in B1 are in [section 9](#9-build-milestone-b1-2026-11-11).
 
 | Area | Tests | Status |
 |---|---|---|
-| Rules and arithmetic | UT-01 to UT-19 | Not run |
-| Tenancy, permissions, provisioning | IT-01, IT-02, IT-16, IT-20 | Not run |
-| Jobs, idempotency, bulk | IT-03, IT-04, IT-05 | Not run |
-| Approval integrity | IT-06, IT-18, UT-07, UT-08, UT-19 | Not run |
-| Ledger evidence | UT-10, UT-17, UT-18 | Not run |
-| Migrations and recovery | IT-07, IT-08, IT-09, IT-14, IT-17 | Not run |
-| Files, retention, links, logging, licensed-material controls | IT-10, IT-11, IT-12, IT-13, IT-15, IT-19 | Not run |
-| Workflows | E2E-01 to E2E-09 | Not run |
+| Rules and arithmetic | UT-01 to UT-19 | B1: Pass except UT-03 and UT-15, Not run |
+| Tenancy, permissions, provisioning | IT-01, IT-02, IT-16, IT-20 | B1: IT-01, IT-02, IT-16 Pass; IT-20 Not run |
+| Jobs, idempotency, bulk | IT-03, IT-04, IT-05 | B1: Pass (IT-03 adapted) |
+| Approval integrity | IT-06, IT-18, UT-07, UT-08, UT-19 | B1: Pass |
+| Ledger evidence | UT-10, UT-17, UT-18 | B1: Pass |
+| Migrations and recovery | IT-07, IT-08, IT-09, IT-14, IT-17 | B1: IT-07 Pass (scripts, no CI); others Not run |
+| Files, retention, links, logging, licensed-material controls | IT-10, IT-11, IT-12, IT-13, IT-15, IT-19 | B1: IT-11, IT-12, IT-13, IT-15, IT-19 Pass (IT-12, IT-13 adapted); IT-10 Not run |
+| Workflows | E2E-01 to E2E-09 | B1: E2E-01, E2E-02, E2E-04, E2E-06 Pass at API level only; E2E-09 Pass adapted; others Not run |
 | Accessibility (manual, [design section 8](design.md#8-accessibility-map)) | T-6.1.3 | Not run |
 | Security controls ([TRD 11.3](TRD.md#113-threat-model)) | T-6.1.4 | Not run |
 | Load and restore targets ([TRD section 10](TRD.md#10-quality-requirements)) | T-6.1.5, T-7.1.1 | Not run |
@@ -59,37 +59,37 @@ All `Not run`. Definitions are in the [test catalogue](execution-plan.md#7-test-
 | MH-05 | S-07; `/lines/{id}/photos`, `/references` | AD-06, DD-04, DD-07 | `photos` attestation fields, `reference_citations.material_type` and URL check, `line_evidence` | T-4.2.1 | IT-05, IT-15 |
 | MH-06 | S-06, S-08; `/lines/{id}/approve`, `GET /ros/{id}/packet-review`, `POST /ros/{id}/packets` | AD-07, DD-02 | `supplement_lines` approval reset rule and fingerprint; `packets.review_fingerprint`; approve and freeze permissions | T-4.2.2 | UT-07, UT-08, IT-02, IT-06, IT-18 |
 | MH-07 | S-09; `/packets/{id}/mark-sent` | AD-05, DD-05 | `packets`, `packet_lines` snapshot | T-4.2.3, T-4.2.4 | UT-19, E2E-01, E2E-04, E2E-06 |
-| MH-08 | S-10, S-11; `/packet-lines/{id}/response`, `/ros/{id}/payments`, `/packets/{id}/remittance-documents` | DD-01, AD-08 | `packet_lines` response checks and carry-forward, `payments` packet and remittance rules, view `ro_ledger` | T-5.1.1, T-5.1.2 | UT-09, UT-10, UT-17, UT-18, E2E-01 |
-| MH-09 | S-12; `GET /pilot/report`, `PATCH /pilot/counts` | DD-01 | `baseline_ros`, `pilots` counts | T-5.1.3 | UT-11, UT-12, E2E-07 |
+| MH-08 | S-10, S-11; `/packet-lines/{id}/response`, `/ros/{id}/payments`, `/packets/{id}/remittance-documents` | DD-01, AD-08 | `packet_lines` response checks and carry-forward, `payments` packet and remittance rules, ledger `ro_ledger` (computed in `sp_core.ledger` in B1, no SQL view) | T-5.1.1, T-5.1.2 | UT-09, UT-10, UT-17, UT-18, E2E-01 |
+| MH-09 | S-12; `GET /pilots/{id}/report`, `PATCH /pilots/{id}/counts` | DD-01 | `baseline_ros`, `pilots` counts | T-5.1.3 | UT-11, UT-12, E2E-07 |
 | MH-10 | S-01, S-02, S-13, S-14; `/auth/*`, `/users`, `/audit`, `/operator/tenants` | AD-02, AD-11 | `memberships`, `operator_grants`, `audit_events`; section 5 permissions | T-2.2.1, T-2.2.2, T-2.2.3, T-2.2.4 | IT-01, IT-02, IT-16, IT-20 |
 | MH-11 | S-13, S-14; `/exports`, `/packets/{id}/takedown`, `/deletion-requests` | AD-06, AD-09 | Retention, takedown and deletion rules in schema section 8 | T-5.1.4, T-7.1.4 | IT-10, IT-14, IT-19 |
 | MH-12 | S-03, S-04, S-07, S-09; `GET /jobs/{id}` | AD-03 | `jobs` with `state_version` | T-3.1.2, T-4.2.1 | UT-13, IT-03, IT-04, IT-05, E2E-03 |
 
 ## 5. Production risk register
 
-The only home of the 22 risks. Other documents cite the ID. Every test is `Not run`.
+The only home of the 22 risks. Other documents cite the ID. Tests are `Not run` unless a row says *B1: Pass*, with the run recorded in [section 9](#9-build-milestone-b1-2026-11-11).
 
 | ID | Risk | Impact for this buyer and data | Prevention | Detection signal | Test and expected outcome | Task |
 |---|---|---|---|---|---|---|
-| R-01 | Out-of-order or duplicate events overwrite a newer job state | A late "running" event shows a finished estimate as still reading, or an old render replaces a packet PDF so the file no longer matches the frozen lines the estimator approved | Compare-and-set on `jobs.state_version`; render keyed by packet; PDF hash stored at first success | Log count of discarded stale transitions; hash mismatch alert | IT-04, UT-13: final state stays `succeeded`, one set of lines | T-3.1.2 |
-| R-02 | A caller timeout prevents reconciliation with a later completion | On a slow shop connection the upload appears to fail; the estimator uploads again and gets duplicate lines or thinks nothing happened | Idempotency key; uniqueness by file hash; state read from `GET /jobs/{id}` | Duplicate-key hits per day | IT-03: one document, one job, result visible after the aborted call | T-3.1.2 |
-| R-03 | New utilities duplicate shared behaviour | A second rounding or business-day helper makes the ledger total differ from the packet total by a cent, which an adjuster or owner will notice | Money, dates and state transitions exist once in `packages/core`; duplicate-name check | Boundary script output in CI | UT-01 and the boundary script: a duplicated helper fails the build | T-2.1.1 |
-| R-04 | Applications import private code across boundaries | The web app or worker reaches into API internals and freezes a packet through a path that skips the approval check | Import rules: apps import only package public modules | Boundary script | Boundary script fails on a seeded illegal import | T-2.1.1 |
-| R-05 | Tenant enforcement scattered or bypassed | Shop A sees shop B's estimates, claim numbers and per-insurer approval history; the two may be competitors in the same town | Row-level security, composite keys, tenant-prefixed object keys, one tenant per job; no cache in the MVP | Failed-authorization log; daily query for rows whose parent tenant differs | IT-01: every endpoint and the worker return nothing for another tenant | T-2.2.1 |
+| R-01 | Out-of-order or duplicate events overwrite a newer job state | A late "running" event shows a finished estimate as still reading, or an old render replaces a packet PDF so the file no longer matches the frozen lines the estimator approved | Compare-and-set on `jobs.state_version`; render keyed by packet; PDF hash stored at first success | Log count of discarded stale transitions; hash mismatch alert | IT-04, UT-13: final state stays `succeeded`, one set of lines. *B1: Pass, IT-04 and UT-13 (unit and database)* | T-3.1.2 |
+| R-02 | A caller timeout prevents reconciliation with a later completion | On a slow shop connection the upload appears to fail; the estimator uploads again and gets duplicate lines or thinks nothing happened | Idempotency key; uniqueness by file hash; state read from `GET /jobs/{id}` | Duplicate-key hits per day | IT-03: one document, one job, result visible after the aborted call. *B1: Pass, IT-03 (adapted: repeat with the same key; a mid-request abort was not simulated)* | T-3.1.2 |
+| R-03 | New utilities duplicate shared behaviour | A second rounding or business-day helper makes the ledger total differ from the packet total by a cent, which an adjuster or owner will notice | Money, dates and state transitions exist once in `packages/core`; duplicate-name check | Boundary script output in CI | UT-01 and the boundary script: a duplicated helper fails the build. *B1: Pass, UT-01 and the boundary script with a seeded duplicate helper* | T-2.1.1 |
+| R-04 | Applications import private code across boundaries | The web app or worker reaches into API internals and freezes a packet through a path that skips the approval check | Import rules: apps import only package public modules | Boundary script | Boundary script fails on a seeded illegal import. *B1: Pass, boundary script with a seeded app-to-app import* | T-2.1.1 |
+| R-05 | Tenant enforcement scattered or bypassed | Shop A sees shop B's estimates, claim numbers and per-insurer approval history; the two may be competitors in the same town | Row-level security, composite keys, tenant-prefixed object keys, one tenant per job; no cache in the MVP | Failed-authorization log; daily query for rows whose parent tenant differs | IT-01: every endpoint and the worker return nothing for another tenant. *B1: Pass, IT-01 (37 routes with identifiers, body references, worker, zero rows without tenant)* | T-2.2.1 |
 | R-06 | Workers copy configuration and utilities | The worker deletes files on a different retention period, or accepts sizes the API rejects | One typed settings module read by both processes | Start-up log prints a settings fingerprint; mismatch alert | IT-10 run with a changed setting: API and worker act on the same value | T-2.1.1 |
-| R-07 | Worker logging imports web-only modules | The worker crashes at start; uploads stay queued and no packet can be built on a shop's busy day | `packages/obs` has no web-framework import; worker image built without web dependencies | Worker health check; queue-age alert | IT-13: worker starts healthy in its own image | T-2.1.4 |
-| R-08 | ORM omits indexes or constraints in migrations | The duplicate-file constraint exists in production but not in tests, or the reverse; duplicate documents double the requested total | Parity job compares a migrated database with ORM metadata | CI failure | IT-07: a model missing an index fails the build | T-2.1.3 |
+| R-07 | Worker logging imports web-only modules | The worker crashes at start; uploads stay queued and no packet can be built on a shop's busy day | `packages/obs` has no web-framework import; worker image built without web dependencies | Worker health check; queue-age alert | IT-13: worker starts healthy in its own image. *B1: Pass, IT-13 (adapted: subprocess without web modules, not a separate image)* | T-2.1.4 |
+| R-08 | ORM omits indexes or constraints in migrations | The duplicate-file constraint exists in production but not in tests, or the reverse; duplicate documents double the requested total | Parity job compares a migrated database with ORM metadata | CI failure | IT-07: a model missing an index fails the build. *B1: Pass, IT-07 (injected model-only index reported)* | T-2.1.3 |
 | R-09 | Interrupted migrations or backfills cannot resume | A half-finished backfill leaves some lines without `approved_row_version`; those ROs cannot be frozen | Batched backfills with a progress row; each batch one transaction | Backfill progress not `done` after deploy | IT-08: killed backfill resumes, no row twice | T-6.1.2 |
-| R-10 | Merged branches introduce conflicting migration order | Deploy stops with two heads while shops wait for a fix | Linear history; head check in CI | CI failure | IT-07: second head fails the build | T-2.1.3 |
+| R-10 | Merged branches introduce conflicting migration order | Deploy stops with two heads while shops wait for a fix | Linear history; head check in CI | CI failure | IT-07: second head fails the build. *B1: Pass, IT-07 (second head reported)* | T-2.1.3 |
 | R-11 | Index creation locks busy tables | At month end, when estimators record responses, writes to `packet_lines` or `audit_events` block | Concurrent index builds with a lock timeout; constraints added not valid, then validated | Lock-wait metric during deploy | IT-09: writes continue while the index builds | T-6.1.2 |
-| R-12 | Correlation IDs lost, or sensitive data in logs | A failed parse cannot be traced across retry; or VINs, claim numbers and owner names leak into logs kept longer than the source files | Correlation ID in job rows; redaction filter; logs carry identifiers and states only | Log scan for VIN and claim-number patterns | IT-11: one ID across request, job and retry; scan finds nothing | T-2.1.4 |
-| R-13 | Upload keys collide or fail to isolate tenant, source and purpose | A photo from another vehicle or shop lands on a line and goes into a packet: part of the highest-consequence failure | Key scheme with tenant, RO, purpose, document and hash; evidence bound to the RO by composite key | Daily check that every key prefix matches its row | UT-14, IT-01 | T-2.2.5 |
+| R-12 | Correlation IDs lost, or sensitive data in logs | A failed parse cannot be traced across retry; or VINs, claim numbers and owner names leak into logs kept longer than the source files | Correlation ID in job rows; redaction filter; logs carry identifiers and states only | Log scan for VIN and claim-number patterns | IT-11: one ID across request, job and retry; scan finds nothing. *B1: Pass, IT-11* | T-2.1.4 |
+| R-13 | Upload keys collide or fail to isolate tenant, source and purpose | A photo from another vehicle or shop lands on a line and goes into a packet: part of the highest-consequence failure | Key scheme with tenant, RO, purpose, document and hash; evidence bound to the RO by composite key | Daily check that every key prefix matches its row | UT-14, IT-01. *B1: Pass, UT-14, IT-01* | T-2.2.5 |
 | R-14 | Temporary uploads survive retention or failed cleanup | Abandoned estimate PDFs with vehicle-owner details remain after the shop was told they are deleted | 24-hour lifecycle rule on the temporary prefix; daily resumable sweep | Count of objects older than their expiry | IT-10: objects gone, second run idle | T-5.1.4 |
 | R-15 | Missing persistent volumes cause data loss | Frozen packets and the ledger vanish after a service is recreated; the shop cannot show what it sent and the refund test cannot be computed | Production keeps no state on the VM; local and staging use named volumes | Row and object counts after deploy | IT-17: everything present after recreating containers | T-7.1.1 |
-| R-16 | Generated links use internal hosts | The packet download or reset link points at `localhost`; the estimator cannot get the PDF to send | Links built only from `PUBLIC_BASE_URL`; start-up refuses without it | Link host check in smoke test | IT-12 | T-2.2.5 |
-| R-17 | No reliable single start command and health checks | The developer tests the parser against a stack with no worker and ships a broken upload | `make dev` with health checks for every service | Health summary | E2E-09: healthy in 90 seconds from a clean clone | T-2.1.2 |
+| R-16 | Generated links use internal hosts | The packet download or reset link points at `localhost`; the estimator cannot get the PDF to send | Links built only from `PUBLIC_BASE_URL`; start-up refuses without it | Link host check in smoke test | IT-12. *B1: Pass, IT-12 (adapted: internal Host header, no proxy)* | T-2.2.5 |
+| R-17 | No reliable single start command and health checks | The developer tests the parser against a stack with no worker and ships a broken upload | `make dev` with health checks for every service | Health summary | E2E-09: healthy in 90 seconds from a clean clone. *B1: Pass, E2E-09 (adapted: no Docker; API, worker, database)* | T-2.1.2 |
 | R-18 | Back, refresh or deep links lose state | The estimator loses a half-reviewed set of lines, or Back shows an editable review of a frozen packet | Server-held state; URL-held filters; saves on field change | Client error reports on navigation | E2E-03 | T-5.1.5 |
-| R-19 | Bulk processing skips files, hides partial failure, or duplicates on retry | A photo the estimator believes is attached is missing from the packet, or a retried photo batch attaches a file twice | Per-item results; retry skips completed items; photo uniqueness by hash | Jobs in `partial` state per day | IT-05: 7 attached, 2 reported, retry adds none twice | T-4.2.1 |
+| R-19 | Bulk processing skips files, hides partial failure, or duplicates on retry | A photo the estimator believes is attached is missing from the packet, or a retried photo batch attaches a file twice | Per-item results; retry skips completed items; photo uniqueness by hash | Jobs in `partial` state per day | IT-05: 7 attached, 2 reported, retry adds none twice. *B1: Pass, IT-05* | T-4.2.1 |
 | R-20 | Unclear labels, stale routes, broken links | "Approved" is read as the insurer's approval when it means the estimator's, and a shop reports cash it has not been granted | Fixed wording: "Approved by you" for lines, "Insurer approved" for amounts; link crawl | Crawl report; wording review with an estimator | E2E-08: no broken link or unlabelled control | T-5.1.5 |
 | R-21 | Unrequested features consume effort | Time goes to approval-likelihood scores, a Mitchell parser or integrations before any shop has shown collected cash | Every merge names an MH or task; non-goals list; expansion evidence rules | Scope review | T-7.2.3 review: no feature without a requirement | T-7.2.3 |
 | R-22 | Misnamed, duplicate or stale branches | A parser fix for a pilot shop sits on a forgotten branch, or unmerged work is deleted | Branch names carry the task ID; one open branch per task; weekly prune of merged branches only | Branch list older than 14 days | T-7.2.3 review: no stale or unlabelled branch | T-7.2.3 |
@@ -178,3 +178,89 @@ Author checks are not review findings and do not use `F-` identifiers.
 | F-010 part: answers to LQ-01 to LQ-06 | Counsel, Accountant | The steps each task gates | Open |
 | F-012 part: live official Washington text | Anyone with access | Section 2 of Decision | Open; host refused again on 2026-11-11 |
 | Round 2 residue edits | Lead | Release | Checked by the lead, not re-reviewed |
+
+## 9. Build milestone B1 (2026-11-11)
+
+**Authorisation.** On 2026-11-11 the owner authorised implementation in this repository before the Phase 0 sales gate (G1) passed. The decision text in [Decision.md](Decision.md) is unchanged; the gates in [execution-plan section 1](execution-plan.md#1-sequence-and-gates) still apply to real data, calls, visits and invoices. Everything below uses synthetic data only. Branch `feat/b1-foundation`; not pushed by the developer.
+
+**Tasks implemented (fully or in part).** T-2.1.1 layout, settings, boundary check; T-2.1.2 `make dev` (adapted, no Docker); T-2.1.3 in part (migration-head and parity scripts; no CI workflow); T-2.1.4 logging, correlation, redaction; T-2.2.1 schema with row-level security; T-2.2.4 append-only audit; T-2.2.5 key builder and signed links (no temporary-upload lifecycle rule); T-3.1.1 upload with versions and idempotency; T-3.1.2 job table, worker, sweeper, retry; T-3.1.4 in part (manual entry and totals confirmation through the API; no screens); T-4.1.1 diff engine; T-4.2.1 in part (attestation, reference URL rule, per-file bulk results, RO binding, reset; no re-encoding or metadata removal); T-4.2.2 approval, reset, fingerprints, freeze with snapshot; T-4.2.3 in part (email draft and its amount rule; deterministic stand-in renderer, not the PDF template); T-4.2.4 mark sent, undo, supersede; T-5.1.1 responses, carry-forward, payments, reversal, duplicate warning (no proposed split of an insurer payment); T-5.1.3 baseline, counts, refund test, PM-1, PM-2 (no screens); T-5.1.4 in part (takedown only).
+
+**Blocked or not done, and why.** T-3.1.3 CCC ONE parser and UT-03: needs the hand-transcribed fixture set of T-1.1.2, which waits on G1 and real estimate pairs. T-3.1.5 and UT-15 (AI-1, AI-2): LQ-01 and LQ-02 open, and AI provider access is out of B1 scope. T-2.2.2 password, TOTP, sessions and invites: not done in B1; sessions are created by the seed script and test fixtures, so no login endpoint exists. T-2.2.3 in part: permission table enforced and IT-02 passes, but vendor provisioning endpoints and IT-20 are not built. T-4.1.2 checklist import: the checklist v0 comes from T-0.1.4 (Phase 0); the seed holds a three-item synthetic list. T-5.1.2 tracker, T-5.1.5 shell and every screen, `apps/web`: frontend out of B1 scope. Retention sweep, export and deletion (IT-10, IT-14), backfills and index rehearsal (IT-08, IT-09), restore and recreation (IT-17): not built. Deployment, CI workflow, S3 and MinIO: out of B1 scope.
+
+**Environment.** Python 3.12.16 in `.venv`; PostgreSQL 16.15 local; databases `supplementpacket_dev` and `supplementpacket_test`; application role `supplementpacket_app` (NOSUPERUSER, NOBYPASSRLS, owns no tables); every tenant table FORCE ROW LEVEL SECURITY. Redis database index 2 was assigned but is not used: the TRD's queue is the `jobs` table (AD-03). API port 8103; no frontend, so port 3103 is unused.
+
+**Commands and results (final run, 2026-11-11, test database dropped and re-migrated first).**
+
+| Command | Result |
+|---|---|
+| `make test` (`scripts/reset_db.sh supplementpacket_test`, then pytest) | 64 passed, 0 failed (24 unit, 40 integration) in 5.9 s |
+| `make lint` (ruff check and ruff format --check) | Pass, 0 findings, 57 files formatted |
+| `make typecheck` (mypy strict, 46 source files) | Pass, 0 issues |
+| `make boundaries` | Pass, 0 violations |
+| `make heads` | Pass, 1 head (`20261111_0001`) |
+| `make parity` | Pass, 0 differences; row-level security, FORCE and the tenant policy present on all 22 tenant tables; 10 integrity triggers present |
+| `make dev` then `make stop` | database, api and worker healthy; ready 0.6 s after start (2 s including migrate and seed). Not measured from a clean clone: the virtual environment already existed |
+
+**Per test ID** (all run by `make test`; files under `tests/`).
+
+| Test | Result | Test file and note |
+|---|---|---|
+| UT-01 | Pass | `unit/test_core_rules.py`; includes a property round-trip |
+| UT-02 | Pass | `unit/test_core_rules.py` |
+| UT-03 | Not run | Parser blocked (T-1.1.2) |
+| UT-04 | Pass | `unit/test_core_rules.py`: 1.2 h x 5400 = 6480 |
+| UT-05 | Pass | `unit/test_core_rules.py`: 60 generated pairs, each diffed 100 times and once shuffled |
+| UT-06 | Pass | `unit/test_core_rules.py`: 1 of 30 `needs_review`, 29 compared, totals exclude it; also two candidates are ambiguous |
+| UT-07 | Pass | `integration/test_approval_integrity.py`: amount, add photo, delete photo, edit reference, change attestation, correct the shop estimate line, re-run the comparison; each returns the line to draft with `row_version` increased and an audit event; the unrelated approved line is untouched; an unchanged re-run changes nothing |
+| UT-08 | Pass | Unit and integration: freeze refused listing both lines |
+| UT-09 | Pass | Unit and API |
+| UT-10 | Pass | Unit and API (partial reversal of 5000 on a 40000 payment; collected 35000; requested from the live packet only) |
+| UT-11 | Pass | `unit/test_ledger_pilot.py`: base case (rate 3000, expected 120000, incremental 60000, (c) 67% not met, no refund); 8 documents (89%) refund due; 24 of 30 complete gives the same result; 20 of 30 complete gives 700000, rate 4667, expected 186667, negative increment flagged in the shop's favour; rows entered after day 7 fail (a) |
+| UT-12 | Pass | Not computable naming the missing item; PM-2 still computed; undated row sets the uncensored flag; 60-day cut-off applied |
+| UT-13 | Pass | Unit and database |
+| UT-14 | Pass | |
+| UT-15 | Not run | AI blocked (LQ-01) |
+| UT-16 | Pass | Friday to Wednesday = 3 |
+| UT-17 | Pass | Unit and API: approved 15000 counted once, carried to packet 2; payment re-attributed with an audit event; a response on the superseded packet is refused |
+| UT-18 | Pass | Unit and API |
+| UT-19 | Pass | Unit and API: "USD 1,500" refused by name; wording-only edit accepted and changes the fingerprint |
+| IT-01 | Pass | `integration/test_tenancy_permissions.py`: all 37 identifier routes of the inventory return 404 for another tenant's IDs; body references return 404; the worker fails A's job naming B's file with `not_found` and writes nothing; the application role reads zero rows from every tenant table with the tenant unset; a cross-tenant insert is refused |
+| IT-02 | Pass | Office and Operator: approve, exclude, freeze, mark sent, unmark sent all 403; 10 `permission.denied` audit events; no state change. The database also refuses approval or freezing from the worker, Operator or Office actor role |
+| IT-03 | Pass, adapted | One document and one job for repeated uploads; the client abort itself was not simulated (the test client cannot abort mid-request) |
+| IT-04 | Pass | Late "running" and duplicate "succeeded" discarded; one set of lines |
+| IT-05 | Pass | 7 attached, 2 reported; retry attaches none twice |
+| IT-06 | Pass | Sequential and concurrent: the freeze waits on the row lock, then returns 409 naming the line; no packet |
+| IT-07 | Pass | Scripts only (no CI workflow): a model-only index and a second head both fail |
+| IT-08, IT-09, IT-10 | Not run | Not built |
+| IT-11 | Pass | One correlation ID across request, job, crash and retry; no VIN, claim number, adjuster name, file name or amount in the log output |
+| IT-12 | Pass, adapted | Link host equals `PUBLIC_BASE_URL` with an internal Host header; no real proxy |
+| IT-13 | Pass, adapted | Worker process starts without importing FastAPI, Starlette, uvicorn or the API; not a separate image |
+| IT-14, IT-17, IT-20 | Not run | Not built |
+| IT-15 | Pass | URL refused for subscription-portal procedures and estimating guides, citation accepted without it; photo batch without the tick refused; a PDF posing as a photo rejected; no procedure, send, transmit or email route in the inventory. Tests the stated controls only |
+| IT-16 | Pass | Update, delete and truncate of audit rows refused |
+| IT-18 | Pass | Photo replaced by the Operator: 409 listing the line, line back to draft; email paragraph edited: 409 listing `email_draft`; fresh review then freeze succeeds |
+| IT-19 | Pass | With the stand-in renderer: PDF and photo objects deleted, snapshot text redacted, amounts, PDF hash and audit rows intact, ledger unchanged; Estimator refused (Owner only) |
+| E2E-01 | Pass, API level | Upload, manual lines, diff, manual line with photo, exclusion, approval, freeze, render, mark sent, responses, payment; three totals correct; the stand-in PDF holds only approved lines. No browser |
+| E2E-02 | Pass, API level | Unreadable file fails with `unreadable_manual_entry_offered`; manual entry completes the parse |
+| E2E-04 | Pass, API level, freeze only | Same key twice gives one packet; a new key with nothing changed gives 409. Mark sent and payment double-submit not tested |
+| E2E-06 | Pass, API level | Superseding packet with a withdrawn line; old packet readable; withdrawal shown separately |
+| E2E-03, E2E-05, E2E-07, E2E-08 | Not run | No frontend; no imported hand-run ledger |
+| E2E-09 | Pass, adapted | See the `make dev` row above |
+
+**Document changes made in B1 (implementation showed a gap).**
+
+- schema.md: fields added and marked *(B1)*: `repair_orders.email_free_paragraph` (the email draft's one free paragraph needed a home before freeze), `documents.content_type`, `supplement_lines.diff_key` (a diff line needs a stable key across document versions so a re-run can tell "changed" from "new"), `photos.content_type` and `row_version`, `reference_citations.created_by` and `created_at`, `line_evidence.ro_id` (the composite key binding evidence to the RO needs the column), `packet_lines.approved_fingerprint` (decides "unchanged" for carry-forward and the duplicate-freeze check), `jobs.max_attempts`, `pilots.row_version`, `operator_grants.created_at`, table `idempotency_records`. The response-document key on `packet_lines` was relaxed to (`tenant_id`, id) with a service check, because a carried-forward response keeps the superseded packet's document. Partial payment reversal and one reversal per payment are stated. The ledger is computed in one Python function, not the proposed SQL view. One application role is used locally instead of the four proposed roles; two SECURITY DEFINER functions claim and sweep jobs.
+- TRD.md: endpoints added (`POST /documents/{id}/manual-lines`, `PATCH /photos/{id}`, `GET /packets/{id}/pdf/download`, `GET /ros/{id}/ledger`), pilot routes renamed to `/pilots/{id}/counts` and `/pilots/{id}/report` (a tenant can have one pilot per location), the freeze request carries the review components, job `takedown_purge` added, local start command as built. The traceability row for MH-09 in section 4 was updated to the new routes.
+- AGENTS.md: state line, section 4 note, Git hygiene note, utilities and command index (section 11). CLAUDE.md: `make dev` no longer proposed. execution-plan.md: commands that now exist are marked; section 7 now points here for results.
+
+**Rules the documents did not fix, decided in B1 (author proposals, not re-reviewed).**
+
+- Rounding in the refund test: every derived amount is computed as an exact fraction and rounded half away from zero to the cent once, when reported; the expected amount is computed from the exact rate, not the rounded one (UT-11 variant: 186667, not 4667 x 40 = 186680).
+- The 60-day and 90-day cut-off for dated baseline rows: a row whose approval (or collection) date is more than 60 (or 90) days after its first request contributes 0 to that measure; the row still counts as complete.
+- Day 7 for condition (a) ends at 23:59:59 in the tenant's time zone on the start date plus 6 days. The pilot record has no timestamp for when the two counts were supplied, so (a) checks only that they are present; a field is needed.
+- No field records a vendor-late draft for condition (b); the report counts sent packets only. The core function supports the late flag (UT-11) once a field exists.
+- Pilot approved dollars count lines whose response date is on or before day 60, and lines with an approval but no response date. Review whether undated responses should count.
+- The packet PDF should show the approver's name (MH-07), but `users` has no name column; the stand-in shows the user ID.
+- Diff pairing: a shop line pairs with an insurer line of the same operation and the same normalised description or part number; no candidate on a free-text (`other`, no part number) line, or two or more candidates, gives `needs_review`. Insurer-only lines produce nothing. A part-type change produces a `part_type_difference` line even when the price gap is 0.
+
+**Risk register.** Rows R-01, R-02, R-03, R-04, R-05, R-07, R-08, R-10, R-12, R-13, R-16, R-17 and R-19 now cite the B1 test that covers them. No other row changed.

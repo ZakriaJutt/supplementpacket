@@ -2,7 +2,7 @@
 
 Canonical instructions for any agent or developer working in this repository. [CLAUDE.md](CLAUDE.md) adds product-specific guidance and defers to this file.
 
-**State of the repository:** planning documents only. No application code, scripts, migrations or infrastructure exist. Every command named anywhere in these documents is **proposed** until an implementation is merged and this line is updated.
+**State of the repository:** build milestone B1 (foundation and deterministic core) implemented on branch `feat/b1-foundation`, not yet merged. The owner authorised implementation on 2026-11-11, before the Phase 0 sales gate G1 passed ([verification-report-fixing.md section 9](verification-report-fixing.md#9-build-milestone-b1-2026-11-11)). Python packages under `apps/` and `packages/`, one Alembic migration, scripts and tests exist; there is no web frontend, no real provider integration and no deployment. Commands marked **exists** in [section 11](#11-utilities-index-b1) are implemented; every other command named in these documents is still **proposed**.
 
 ## 1. Reading order
 
@@ -36,9 +36,9 @@ A fact is stated once and cited elsewhere by section or ID. If two files disagre
 - Licensed repair material is reference-only by default ([Decision 3.1](Decision.md#31-rights-to-supporting-repair-material)). No table or log stores procedure or estimating-guide text; there is no procedure upload and no automatic detection is claimed. No estimate line data is combined across tenants.
 - Anything on the non-goals list in [PRD section 8](PRD.md#8-non-goals) needs the expansion evidence in PRD section 12 and a new must-have before work begins (R-21).
 
-## 4. Architecture conventions (proposed)
+## 4. Architecture conventions
 
-- Layout: `apps/web`, `apps/api`, `apps/worker`, `packages/core`, `packages/db`, `packages/files`, `packages/parsers`, `packages/obs`, `packages/ai` ([TRD section 5](TRD.md#5-building-block-view)).
+- Layout: `apps/web`, `apps/api`, `apps/worker`, `packages/core`, `packages/db`, `packages/files`, `packages/parsers`, `packages/obs`, `packages/ai` ([TRD section 5](TRD.md#5-building-block-view)). B1 implements all of these except `apps/web` and `packages/ai` (AI is blocked on LQ-01). `scripts/check_boundaries.py` enforces the import rules below.
 - Apps import only public modules of packages. Apps never import each other. Packages never import apps.
 - **Reuse before writing.** Money, dates, state transitions, key building, settings and logging each exist once. Search `packages/` before adding a helper; extend the existing one (R-03, R-06).
 - Deterministic code for money, totals, differences, permissions, retention, the refund test and metrics. Models only inside the two functions in [TRD 8.7](TRD.md#87-ai-functions), behind consent, with fixtures.
@@ -80,7 +80,7 @@ A fact is stated once and cited elsewhere by section or ID. If two files disagre
 
 - Branch names: `T-<phase>.<milestone>.<task>-short-slug`. One open branch per task. Delete a branch only after it is merged (R-22).
 - Commits name the task and, where relevant, the must-have.
-- No credentials, tokens, customer files or real data in any commit. No generated framework files in this planning repository.
+- No credentials, tokens, customer files or real data in any commit. No generated framework files, virtual environments, caches or local runtime data (`.gitignore` excludes `.venv`, `node_modules`, `.env*`, caches, build output and `.run/`).
 - The final remote commit identifier is recorded in the lead's coordination ledger, not in this repository.
 
 ## 10. Reporting completion accurately
@@ -89,3 +89,42 @@ A fact is stated once and cited elsewhere by section or ID. If two files disagre
 - Application checks stay `Not run` in the verification file until they have been run against real code.
 - State what was not done. Never report a control as present because a document describes it. Never upgrade an unverified source.
 - Review findings use `F-nnn` and belong to the reviewer; author checks use `SC-nn`.
+
+## 11. Utilities index (B1)
+
+Search here before adding a helper (R-03). Each lives once; `scripts/check_boundaries.py` fails the build on a second definition of the names it tracks.
+
+| Need | Module | Notes |
+|---|---|---|
+| Parse, format and round money | `packages/core/src/sp_core/money.py` | Integer cents; exact half-up rounding from `Fraction`; never floats |
+| Business days, pilot day boundaries | `packages/core/src/sp_core/dates.py` | Weekends only; no holiday calendar in B1 |
+| Settings (both processes) | `packages/core/src/sp_core/settings.py` | Refuses to start without `PUBLIC_BASE_URL`, `DATABASE_URL`, `STORAGE_BUCKET`, `SESSION_KEY` |
+| Totals reconciliation | `packages/core/src/sp_core/reconcile.py` | Tolerance USD 0.01 |
+| Estimate diff | `packages/core/src/sp_core/diff.py` | `ENGINE_VERSION`; `needs_review` rule |
+| Approval checks and fingerprints | `packages/core/src/sp_core/approval.py` | Line fingerprint, review components and fingerprint, freeze blockers |
+| Email draft and its amount rule | `packages/core/src/sp_core/email_draft.py` | UT-19 |
+| Three-amount ledger, response and payment rules | `packages/core/src/sp_core/ledger.py` | UT-09, UT-10, UT-17, UT-18 |
+| Baseline, refund test, PM-1, PM-2 | `packages/core/src/sp_core/pilot.py` | Decision 5.1; UT-11, UT-12 |
+| Permission table | `packages/core/src/sp_core/permissions.py` | Schema section 5 |
+| Job state machine | `packages/core/src/sp_core/jobs.py` | Compare-and-set on `state_version` |
+| Reference URL rule, photo attestation | `packages/core/src/sp_core/evidence.py` | AD-06 |
+| Logging, correlation, redaction | `packages/obs/src/sp_obs/__init__.py` | No web-framework import |
+| Object keys, stores, signed URLs, content sniffing | `packages/files/src/sp_files/__init__.py` | Key builder is the only way to make a key |
+| Packet renderer interface | `packages/files/src/sp_files/render.py` | Deterministic stand-in only in B1 |
+| Parser interface and registry | `packages/parsers/src/sp_parsers/__init__.py` | No real parser yet (T-3.1.3 blocked) |
+| ORM models, tenant transaction | `packages/db/src/sp_db/models.py`, `session.py` | `tenant_transaction` sets tenant, user, role and correlation ID |
+| Approval reset, immutability, append-only audit | Migration `20261111_0001` (SQL functions and triggers) | `sp_reset_line` is the one reset function |
+
+| Command | State | What it does |
+|---|---|---|
+| `make venv` | exists | Creates `.venv` with `tools/requirements.txt` and puts the source directories on its path |
+| `make dev` | exists | Bootstraps the role, migrates and seeds `supplementpacket_dev`, starts API (port 8103) and worker, waits for readiness; exits non-zero naming the unhealthy service. No Docker, MinIO, web or mail catcher in B1 |
+| `make stop` | exists | Stops the API and worker started by `make dev` |
+| `make test` | exists | Drops and re-migrates `supplementpacket_test`, runs every test |
+| `make lint`, `make typecheck` | exist | ruff (check and format) and mypy strict |
+| `scripts/check_boundaries.py` (`make boundaries`) | exists | Import rules and single-home helpers |
+| `scripts/check_migration_heads.py` (`make heads`) | exists | One linear history |
+| `scripts/orm_parity.py` (`make parity`) | exists | Migrated test database against ORM metadata, plus row-level security and trigger catalog check |
+| `scripts/seed_synthetic.py` | exists | Two synthetic tenants; tokens to `.run/dev-tokens.json` (untracked) |
+| `scripts/reset_db.sh` | exists | Resets one of this product's two databases only |
+| `scripts/run_backfill.py`, `restore_drill.sh`, `replay_deletions.py`, `load_parse.py`, `link_crawl.py` | proposed | Not in B1 |

@@ -44,7 +44,7 @@ Estimator uploads the insurer estimate and the shop estimate → checks the pars
 
 ## First verification checks when implementation begins
 
-1. `make dev` (proposed) starts every service healthy: E2E-09.
+1. `make dev` starts every service healthy: E2E-09 (implemented in B1 for API, worker and database; see verification-report-fixing.md section 9).
 2. Tenant isolation on every endpoint and in the worker: IT-01.
 3. Operator and Office cannot approve, freeze or mark sent: IT-02.
 4. Freeze refuses a line, evidence item or email draft changed after approval or review: IT-06, IT-18, with UT-07 and UT-08.
