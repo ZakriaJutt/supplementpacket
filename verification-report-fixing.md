@@ -1,0 +1,180 @@
+# Verification, findings and fixes — SupplementPacket
+
+This file separates what was checked on the documents from what can only be checked on an application that does not exist yet. It is the single home of the production risk register. The final remote commit identifier is kept in the lead's coordination ledger, not here.
+
+## 1. Status summary
+
+| Item | Status |
+|---|---|
+| Ten planning files written | Yes, 2026-11-10; revised in fix round 1 |
+| Application | Does not exist. Every application check is `Not run` |
+| Customer evidence | None. No interview, no message sent, no pilot |
+| Review | Independent review round 1: 16 findings (0 blocker, 10 major, 6 minor), all answered in [section 6](#6-findings-register). Retest on 2026-11-11 (`supplementpacket-round2.md`): 9 closed, 7 closed with a part open, 0 still open, no new findings. Residues named at that retest were edited afterwards and checked by the lead only. Verdicts transcribed into section 6 by the lead, unchanged |
+| Highest-consequence failure | **An unapproved or unsupported line reaches an insurer** ([PRD section 9](PRD.md#9-highest-cost-user-mistake)) |
+| Most important unproven assumption | That closed and live ROs carry enough supportable missed work for collected cash to exceed the shop's baseline ([Decision section 9](Decision.md#9-stop-rule)) |
+| First paid-pilot milestone | [M0.3](execution-plan.md#milestone-m03--paid-pilots-delivered-by-hand-and-decided): signed agreement and USD 149 paid, delivered by hand |
+
+## 2. Checks performed on the documents
+
+| Check | Method | Result |
+|---|---|---|
+| Exactly ten required files, no others | Directory listing | Pass |
+| Internal links and anchors resolve | Scratch script outside the repository | Pass (SC-01) |
+| Every `MH`, `T`, `S`, `AD`, `DD`, `UT`, `IT`, `E2E`, `R`, `SRC`, `LQ` identifier referenced is defined | Scratch script | Pass (SC-02) |
+| Every must-have in the traceability matrix | Scratch script | Pass, 12 of 12 (SC-03) |
+| 22 risk rows, each with an existing task | Scratch script | Pass (SC-04) |
+| Screens, endpoints, tables and tasks agree | Scratch script plus reading | Pass with the notes in SC-05 |
+| Arithmetic re-run: unit economics, break-even, base, downside and fallback ramps, binomials, hours, phase totals | Scratch script using the rules printed in Decision 7.4 | Pass (SC-06, SC-08) |
+| Competitor pages opened | Fetched 2026-11-10 | SupplementAI, Repairscope, VaraFix opened; CCC blocked; Audatex terms not found |
+| Legal texts read | Fetched 2026-11-10 | Washington rules read only in archive captures (labelled `[S-arch]`; three sections are pre-amendment captures); 16 CFR 310.3 and 310.6, 47 CFR 64.1200 and the Canadian texts read at the live source |
+| ASVS and WCAG text read before citing | Local copy of ASVS 5.0.0 chapter files; WCAG 2.2 Recommendation | Read; gaps stated as not met |
+| Synthetic examples only; no credentials | Reading | Pass. Names, addresses and RO numbers in examples are invented |
+
+## 3. Application checks planned
+
+All `Not run`. Definitions are in the [test catalogue](execution-plan.md#7-test-catalogue).
+
+| Area | Tests | Status |
+|---|---|---|
+| Rules and arithmetic | UT-01 to UT-19 | Not run |
+| Tenancy, permissions, provisioning | IT-01, IT-02, IT-16, IT-20 | Not run |
+| Jobs, idempotency, bulk | IT-03, IT-04, IT-05 | Not run |
+| Approval integrity | IT-06, IT-18, UT-07, UT-08, UT-19 | Not run |
+| Ledger evidence | UT-10, UT-17, UT-18 | Not run |
+| Migrations and recovery | IT-07, IT-08, IT-09, IT-14, IT-17 | Not run |
+| Files, retention, links, logging, licensed-material controls | IT-10, IT-11, IT-12, IT-13, IT-15, IT-19 | Not run |
+| Workflows | E2E-01 to E2E-09 | Not run |
+| Accessibility (manual, [design section 8](design.md#8-accessibility-map)) | T-6.1.3 | Not run |
+| Security controls ([TRD 11.3](TRD.md#113-threat-model)) | T-6.1.4 | Not run |
+| Load and restore targets ([TRD section 10](TRD.md#10-quality-requirements)) | T-6.1.5, T-7.1.1 | Not run |
+
+## 4. Traceability matrix
+
+| Must-have | Screen or API | Design or architecture decision | Schema or permission | Task | Planned test |
+|---|---|---|---|---|---|
+| MH-01 | S-04; `POST /ros/{id}/documents` | AD-09 | `repair_orders`, `documents` unique by hash | T-3.1.1 | IT-03, E2E-01 |
+| MH-02 | S-05; `/documents/{id}/reconcile` | AD-04, AD-08 | `parse_runs`, `estimate_lines` | T-3.1.3, T-3.1.4 | UT-02, UT-03, E2E-02 |
+| MH-03 | S-06; `POST /ros/{id}/diff` | AD-04, DD-03 | `diff_runs`, `supplement_lines.match_state` | T-4.1.1, T-4.1.3 | UT-04, UT-05, UT-06 |
+| MH-04 | S-06; `GET /checklist` | AD-12, DD-03 | `checklist_versions`, `checklist_items` | T-4.1.2 | E2E-01 |
+| MH-05 | S-07; `/lines/{id}/photos`, `/references` | AD-06, DD-04, DD-07 | `photos` attestation fields, `reference_citations.material_type` and URL check, `line_evidence` | T-4.2.1 | IT-05, IT-15 |
+| MH-06 | S-06, S-08; `/lines/{id}/approve`, `GET /ros/{id}/packet-review`, `POST /ros/{id}/packets` | AD-07, DD-02 | `supplement_lines` approval reset rule and fingerprint; `packets.review_fingerprint`; approve and freeze permissions | T-4.2.2 | UT-07, UT-08, IT-02, IT-06, IT-18 |
+| MH-07 | S-09; `/packets/{id}/mark-sent` | AD-05, DD-05 | `packets`, `packet_lines` snapshot | T-4.2.3, T-4.2.4 | UT-19, E2E-01, E2E-04, E2E-06 |
+| MH-08 | S-10, S-11; `/packet-lines/{id}/response`, `/ros/{id}/payments`, `/packets/{id}/remittance-documents` | DD-01, AD-08 | `packet_lines` response checks and carry-forward, `payments` packet and remittance rules, view `ro_ledger` | T-5.1.1, T-5.1.2 | UT-09, UT-10, UT-17, UT-18, E2E-01 |
+| MH-09 | S-12; `GET /pilot/report`, `PATCH /pilot/counts` | DD-01 | `baseline_ros`, `pilots` counts | T-5.1.3 | UT-11, UT-12, E2E-07 |
+| MH-10 | S-01, S-02, S-13, S-14; `/auth/*`, `/users`, `/audit`, `/operator/tenants` | AD-02, AD-11 | `memberships`, `operator_grants`, `audit_events`; section 5 permissions | T-2.2.1, T-2.2.2, T-2.2.3, T-2.2.4 | IT-01, IT-02, IT-16, IT-20 |
+| MH-11 | S-13, S-14; `/exports`, `/packets/{id}/takedown`, `/deletion-requests` | AD-06, AD-09 | Retention, takedown and deletion rules in schema section 8 | T-5.1.4, T-7.1.4 | IT-10, IT-14, IT-19 |
+| MH-12 | S-03, S-04, S-07, S-09; `GET /jobs/{id}` | AD-03 | `jobs` with `state_version` | T-3.1.2, T-4.2.1 | UT-13, IT-03, IT-04, IT-05, E2E-03 |
+
+## 5. Production risk register
+
+The only home of the 22 risks. Other documents cite the ID. Every test is `Not run`.
+
+| ID | Risk | Impact for this buyer and data | Prevention | Detection signal | Test and expected outcome | Task |
+|---|---|---|---|---|---|---|
+| R-01 | Out-of-order or duplicate events overwrite a newer job state | A late "running" event shows a finished estimate as still reading, or an old render replaces a packet PDF so the file no longer matches the frozen lines the estimator approved | Compare-and-set on `jobs.state_version`; render keyed by packet; PDF hash stored at first success | Log count of discarded stale transitions; hash mismatch alert | IT-04, UT-13: final state stays `succeeded`, one set of lines | T-3.1.2 |
+| R-02 | A caller timeout prevents reconciliation with a later completion | On a slow shop connection the upload appears to fail; the estimator uploads again and gets duplicate lines or thinks nothing happened | Idempotency key; uniqueness by file hash; state read from `GET /jobs/{id}` | Duplicate-key hits per day | IT-03: one document, one job, result visible after the aborted call | T-3.1.2 |
+| R-03 | New utilities duplicate shared behaviour | A second rounding or business-day helper makes the ledger total differ from the packet total by a cent, which an adjuster or owner will notice | Money, dates and state transitions exist once in `packages/core`; duplicate-name check | Boundary script output in CI | UT-01 and the boundary script: a duplicated helper fails the build | T-2.1.1 |
+| R-04 | Applications import private code across boundaries | The web app or worker reaches into API internals and freezes a packet through a path that skips the approval check | Import rules: apps import only package public modules | Boundary script | Boundary script fails on a seeded illegal import | T-2.1.1 |
+| R-05 | Tenant enforcement scattered or bypassed | Shop A sees shop B's estimates, claim numbers and per-insurer approval history; the two may be competitors in the same town | Row-level security, composite keys, tenant-prefixed object keys, one tenant per job; no cache in the MVP | Failed-authorization log; daily query for rows whose parent tenant differs | IT-01: every endpoint and the worker return nothing for another tenant | T-2.2.1 |
+| R-06 | Workers copy configuration and utilities | The worker deletes files on a different retention period, or accepts sizes the API rejects | One typed settings module read by both processes | Start-up log prints a settings fingerprint; mismatch alert | IT-10 run with a changed setting: API and worker act on the same value | T-2.1.1 |
+| R-07 | Worker logging imports web-only modules | The worker crashes at start; uploads stay queued and no packet can be built on a shop's busy day | `packages/obs` has no web-framework import; worker image built without web dependencies | Worker health check; queue-age alert | IT-13: worker starts healthy in its own image | T-2.1.4 |
+| R-08 | ORM omits indexes or constraints in migrations | The duplicate-file constraint exists in production but not in tests, or the reverse; duplicate documents double the requested total | Parity job compares a migrated database with ORM metadata | CI failure | IT-07: a model missing an index fails the build | T-2.1.3 |
+| R-09 | Interrupted migrations or backfills cannot resume | A half-finished backfill leaves some lines without `approved_row_version`; those ROs cannot be frozen | Batched backfills with a progress row; each batch one transaction | Backfill progress not `done` after deploy | IT-08: killed backfill resumes, no row twice | T-6.1.2 |
+| R-10 | Merged branches introduce conflicting migration order | Deploy stops with two heads while shops wait for a fix | Linear history; head check in CI | CI failure | IT-07: second head fails the build | T-2.1.3 |
+| R-11 | Index creation locks busy tables | At month end, when estimators record responses, writes to `packet_lines` or `audit_events` block | Concurrent index builds with a lock timeout; constraints added not valid, then validated | Lock-wait metric during deploy | IT-09: writes continue while the index builds | T-6.1.2 |
+| R-12 | Correlation IDs lost, or sensitive data in logs | A failed parse cannot be traced across retry; or VINs, claim numbers and owner names leak into logs kept longer than the source files | Correlation ID in job rows; redaction filter; logs carry identifiers and states only | Log scan for VIN and claim-number patterns | IT-11: one ID across request, job and retry; scan finds nothing | T-2.1.4 |
+| R-13 | Upload keys collide or fail to isolate tenant, source and purpose | A photo from another vehicle or shop lands on a line and goes into a packet: part of the highest-consequence failure | Key scheme with tenant, RO, purpose, document and hash; evidence bound to the RO by composite key | Daily check that every key prefix matches its row | UT-14, IT-01 | T-2.2.5 |
+| R-14 | Temporary uploads survive retention or failed cleanup | Abandoned estimate PDFs with vehicle-owner details remain after the shop was told they are deleted | 24-hour lifecycle rule on the temporary prefix; daily resumable sweep | Count of objects older than their expiry | IT-10: objects gone, second run idle | T-5.1.4 |
+| R-15 | Missing persistent volumes cause data loss | Frozen packets and the ledger vanish after a service is recreated; the shop cannot show what it sent and the refund test cannot be computed | Production keeps no state on the VM; local and staging use named volumes | Row and object counts after deploy | IT-17: everything present after recreating containers | T-7.1.1 |
+| R-16 | Generated links use internal hosts | The packet download or reset link points at `localhost`; the estimator cannot get the PDF to send | Links built only from `PUBLIC_BASE_URL`; start-up refuses without it | Link host check in smoke test | IT-12 | T-2.2.5 |
+| R-17 | No reliable single start command and health checks | The developer tests the parser against a stack with no worker and ships a broken upload | `make dev` with health checks for every service | Health summary | E2E-09: healthy in 90 seconds from a clean clone | T-2.1.2 |
+| R-18 | Back, refresh or deep links lose state | The estimator loses a half-reviewed set of lines, or Back shows an editable review of a frozen packet | Server-held state; URL-held filters; saves on field change | Client error reports on navigation | E2E-03 | T-5.1.5 |
+| R-19 | Bulk processing skips files, hides partial failure, or duplicates on retry | A photo the estimator believes is attached is missing from the packet, or a retried photo batch attaches a file twice | Per-item results; retry skips completed items; photo uniqueness by hash | Jobs in `partial` state per day | IT-05: 7 attached, 2 reported, retry adds none twice | T-4.2.1 |
+| R-20 | Unclear labels, stale routes, broken links | "Approved" is read as the insurer's approval when it means the estimator's, and a shop reports cash it has not been granted | Fixed wording: "Approved by you" for lines, "Insurer approved" for amounts; link crawl | Crawl report; wording review with an estimator | E2E-08: no broken link or unlabelled control | T-5.1.5 |
+| R-21 | Unrequested features consume effort | Time goes to approval-likelihood scores, a Mitchell parser or integrations before any shop has shown collected cash | Every merge names an MH or task; non-goals list; expansion evidence rules | Scope review | T-7.2.3 review: no feature without a requirement | T-7.2.3 |
+| R-22 | Misnamed, duplicate or stale branches | A parser fix for a pilot shop sits on a forgotten branch, or unmerged work is deleted | Branch names carry the task ID; one open branch per task; weekly prune of merged branches only | Branch list older than 14 days | T-7.2.3 review: no stale or unlabelled branch | T-7.2.3 |
+
+None of the 22 is judged not applicable. R-05 would widen if a cache or search index were added (keys must then include the tenant); R-15 would return in production if state were ever stored on the VM.
+
+## 6. Findings register
+
+Independent review round 1 (2026-11-10), 16 findings. The author made every fix below and is the owner of each. The author did not dispute any finding. Retest results are the reviewer's to give.
+
+| ID | Severity | File (as reported) | Evidence | Impact | Owner | Fix made | Retest condition | Retest result |
+|---|---|---|---|---|---|---|---|---|
+| F-001 | major | schema 3; TRD 6.2, 8.1; PRD MH-06, MH-07; App-flow S-06 to S-08; execution-plan tests | Approval reset covered line fields only; evidence, diff re-run, source-line edits and the email draft were outside it | An unseen photo, reference or email text could be frozen under the estimator's approval | Author | Lead ruling applied. Any change to a line, its evidence, an attestation, a linked source line, or a changing diff re-run returns the line to draft (schema reset rule, one function plus triggers). Freeze must carry the review fingerprint the screen displayed (lines, evidence, email draft, recipient); mismatch gives 409 and a reload. Email draft is generated plus one paragraph and may contain no other amount. Batch approval removed. Hand-run kit: draft watermark, approval sheet listing evidence, new sheet after any change. Tests UT-07 widened, UT-19, IT-18 added. Round 2 residue: batch approval removed from T-4.1.3 and R-19. Residue edited after retest; checked by the lead, not re-reviewed | Requirement, schema, TRD, screen and tests state the same rule; evidence swap between approve and freeze is refused | Closed, part open: execution-plan T-4.1.3 acceptance check and R-19 impact still name batch approval, which was removed; SC-09 says none remain (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-002 | major | Decision 5.1, 9, 12.1; PRD PM-1, PM-4, MH-09 | Refund test and gate C were gross; 33.3 and the under-34 disqualifier mixed an incremental rate with a gross threshold; PM-1 shop total undefined; no false-stop figure; build committed before gate C | Threshold could pass with no incremental cash | Author | Lead ruling applied. Refund test = approved on qualifying packets minus baseline approved per insurer-paid RO times window RO count; gate C both limbs in incremental collected dollars per shop per window (PM-1 shop total). Derivation redone: 1,000 / (0.20 x 150) = 33.3 insurer-paid repairs; refund owed to 46.6%, 28.6%, 3.1% of 34-, 40-, 60-repair shops under the stated illustration. Cut-off rule for baseline rows stated with its bias. Gate C false stop given for limb 2 (7.3%, 26.4%), limb 1 stated not computable. G1 now releases Phases 1 to 3 only; G1b (interim gate C, week 21) releases the rest; FD-03 added. **Open:** limb 1 false-stop needs pilot variance data. Round 2 residue: incomplete baseline rows can no longer lower the baseline (declared supplemented count; scaled at 80% or more complete, otherwise highest complete row, shop's favour), in Decision 5.1, the agreement contents, PRD metrics, schema `pilots` and UT-11. Residue edited after retest; checked by the lead, not re-reviewed | Definitions are incremental and in one unit; arithmetic reproduces | Closed, part open: gate C limb-1 false stop needs pilot variance data; baseline rate is understated when supplemented baseline rows are incomplete or omitted (no completeness rule) (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-003 | major | schema payments and ledger; PRD MH-08; App-flow S-10 | Collected had no document, no packet attribution, no bound; approved could double count after supersede | The decisive number was the least evidenced | Author | Supplement payments must name a packet; `remittance` document purpose and `remittance_document_id`; only evidenced payments count in PM-1, PM-2, gate C and the report; unevidenced shown apart; collected above approved needs a reason; proposed split against the original-estimate balance; `supplement_repayment` kind. Approved defined on the same live packet set as requested, with carry-forward of responses and re-pointing of payments on supersede. Tests UT-17, UT-18. Round 2 residue: wording made consistent (users never edit payments; the system re-attributes on supersede with an audit event). Residue edited after retest; checked by the lead, not re-reviewed | Ledger definitions, screen and tests agree; supersede-after-response counted once | Closed (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-004 | major | Decision 1, 12.5 | Outreach copy stated the refund without its conditions; Decision 1 said recovered | A shop could be refused a refund it was offered unconditionally | Author | Decision 1 row matches 5.1. Email states the incremental test and all three conditions and points to the agreement. Phone script carries no price or refund | Both messages consistent with 5.1 | Closed (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-005 | major | Decision 3.1; PRD MH-05, MH-11; schema; TRD AD-06, 8.7, 11.3; App-flow S-07, S-14; IT-15 | Guard covered only a typed upload; screenshots, pasted text, deep links, allow-list ownership and purge were unaddressed | Licensed material could enter a packet with default settings | Author | Claim withdrawn: no automatic detection is asserted; residual risk stated in Decision 3.1 and TRD 11.3 as not prevented. Controls added: no procedure upload path (allow-list removed from the MVP), unticked attestation per photo batch, notices on free text, `material_type` with no URL for subscription-portal procedures or guides (Toyota linking clause recorded), AI-2 off until LQ-01 and LQ-02 close, Owner takedown that purges a frozen packet's files (IT-19). LQ-01 widened to the insurer's estimate; LQ-02 widened to whether a citation itself is disclosure. **Open:** LQ-01, LQ-02 need the licence texts and counsel | Withdrawn claim absent everywhere; residual risk and takedown present | Closed, part open: LQ-01 and LQ-02 need licence texts and counsel; detection is not claimed and the residual risk is stated (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-006 | major | Decision 12.4, 12.5, LQ-03; execution-plan T-0.1.1 | B2B exemption stated without the 310.3(a)(2) and (4) carve-out; out-of-state reach and penalties of RCW 19.158 missing; script stated price and refund | Exposure on the first call understated | Author | 16 CFR 310.3 and 310.6 reread at eCFR; RCW 19.158.050, .100, .110, .120, .140, .150, .160 reread in the 2026-01-19 archive capture (labelled). Decision 12.4 restates both, including the misdemeanor, civil penalty and criminal classes. Default is now registration before the first call; price and refund only in writing; fallback marked conditional on counsel and LQ-05. T-0.1.1 gates every call. **Open:** LQ-03 itself, and the registration fee, need the Department of Licensing or counsel | 12.4 accurate against the texts; script free of price and refund | Closed, part open: LQ-03 answer and the registration fee need the Department of Licensing or counsel (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-007 | major | Decision 7.4, 8, 12.3, 12.4 | Pool under the in-person fallback not shown | Plan's own constraint yields fewer pilots than the ramp | Author | Decision 8 tabulates three cases (639, 1,112, 357). Fallback: 11.4 demos, 2.9 pilots, 2.1 continuing, peak 2.34 accounts, cumulative -8,096 at month 12; gate B read at 11 demos (false stop 19.7%); four pilots for gate C not expected. The ramp states that it assumes the registered, remote case | Both cases shown with the one the ramp uses | Closed (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-008 | major | Decision 6, 7.2, 7.4, 12.6, 12.8; PRD CM-2 | Base ramp kept 96% of pilots against a 3-of-4 target | Base case optimistic against its own target | Author | One continuation rate, 75% [A], defined once in Decision 6 and used in 7.2, 7.4, 8, 12.6, 12.8 and CM-2. Base ramp recomputed: peak 6.12 paying accounts, trough -8,292 in month 10, never cumulatively positive to month 18. Break-even at that rate added (7 and 40) beside the chat's 6 and 37 | Reviewer's variant reproduces the table | Closed (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-009 | major | Decision 7.1, 7.4; execution-plan 5 | Build priced at 160 hours only | Cash required understated | Author | 7.1 shows the chat figure and the author's range (now 332 to 488 hours after the round 1 additions = USD 24,057.97 to 35,362.32); 7.4 gives the trough with the build bought (USD 32,350 to 43,654). Counsel, accountant and registration fee listed as missing inputs with their effect per USD 1,000. **Open:** those three costs need quotes | Both figures shown; range used in the cash statement | Closed, part open: counsel, accountant and registration costs are missing inputs, not in the ramp (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-010 | major | execution-plan 1, 2, M0.1; Decision 5, 11 | Only LQ-03 had a task; live data, visits and invoices could start with questions open | Phase 0 could handle real data and money ungated | Author | Every LQ has a task and an exit placed before the step it blocks: T-0.1.1 (LQ-03, first call), T-0.1.2 (LQ-01, LQ-02; a shop stays blocked while its row is not obtained), T-0.1.5 (LQ-04, first invoice), T-0.1.6 (LQ-05, first visit), T-0.1.7 (LQ-06 and the hand-run data handling rule, first real estimate). G0 lists them. **Open:** the answers | Each LQ maps to a task; G0 lists them; handling rule stated | Closed, part open: answers to LQ-01 to LQ-06 pending; each now blocks its step (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-011 | minor | Decision 7.4, 12.8 | Downside figures not reproducible; two acquisition-timing bases | Figures could not be rebuilt from the text | Author | Exact recurrences printed for base and downside; downside is now -13,660 / -17,730 and -65,834 / -95,991. Acquisition booked at USD 600 when a pilot is paid, everywhere; 12.8 shows 1,040, 2,800, 4,800 and reconciles to the ramp at months 1, 2 and 3; earlier cash timing noted | Reviewer's script reproduces both | Closed (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-012 | minor | Decision 0, 2, 12.4, 13; PRD 2, 9 | Archive captures carried the label for sources read live | Quoted text may not be the text in force | Author | New label `[S-arch]` on every claim resting on a capture; per-section capture dates in SRC-04 to SRC-06; -390, -320 and -380 marked pre-amendment, current text unverified. **Open:** the live official text could not be reached | Labels and dates present | Closed, part open: live official Washington text unreachable (also for the reviewer on 2026-11-11); -390, -320, -380 are pre-amendment captures (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-013 | minor | design 4 | One token for two meanings of approved | Works against R-20 | Author | Tokens split: `insurer-approved` and `estimator-approved`; the line chip reads Approved by you | Two tokens | Closed (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-014 | minor | TRD 8.1; App-flow 1, S-12, S-13; schema | No path to create a tenant, location, insurer or pilot; missing fields for refund conditions | Refund conditions not evaluable from stored data | Author | Vendor provisioning endpoints and permission row; Owner manages locations and insurers; `baseline_ros.created_at` and dates; `pilots` baseline and window counts; `preapproved` response status; amounts defined as excluding tax; S-12 roles aligned with schema; IT-20 | Paths and fields named | Closed (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-015 | minor | PRD 2, 9; Decision 2, 4 | Launch year, funding and RCW 46.71.045 slightly overstated | Small overstatements | Author | Reworded: launch reported for one vendor by a teaser; no funding claim; 46.71.045 described as about the customer, with the law on insurer requests marked unverified | Wording matches sources | Closed (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+| F-016 | minor | App-flow 4; design 8; TRD 8.2, 11.3 | Session-storage restore; no focus rule after the two critical refusals; 7.2.4, 5.2.6 and PDF rendering unaddressed | Text left in a shared browser; keyboard users lose place | Author | Drafts are saved server-side and nothing typed is kept in browser storage (14.3.1 row); focus rules for the S-06 conflict and the S-08 refusal; threat rows for 7.2.4, 5.2.6 and template rendering; TOTP now mandatory for Estimators, leaving 6.3.3 not met for Office only | Rows and rules present | Closed (independent reviewer retest, 2026-11-11, `supplementpacket-round2.md`; verdict transcribed by the lead) |
+
+Also changed in the same round, from the reviewer's notes outside the numbered findings: M0.3 now runs weeks 4 to 26; refund condition (b) counts packets the vendor drafted late; Repairscope's beta programme is listed; the brief's dropped items are recorded as departures.
+
+### Author self-check log
+
+Author checks are not review findings and do not use `F-` identifiers.
+
+| ID | Check | Result | Action |
+|---|---|---|---|
+| SC-01 | Links and anchors across the ten files | All relative links and anchors resolve (rerun after fix round 1) | None |
+| SC-02 | Identifier definitions | Every referenced `MH`, `T`, `S`, `AD`, `DD`, `UT`, `IT`, `E2E`, `R`, `SRC`, `LQ` identifier is defined | None |
+| SC-03 | Must-haves in the matrix | MH-01 to MH-12 each have a row with a screen or API, decision, schema, task and test | None |
+| SC-04 | Risk rows | 22 rows, R-01 to R-22, each naming an existing task | None |
+| SC-05 | Cross-document agreement | 14 screens in App-flow, design and matrix; every endpoint in TRD 8.1 maps to a must-have; every table used by an endpoint exists in schema.md. Note: `backfill_progress` is described in schema section 9 only, as an operational table | None |
+| SC-06 | Arithmetic, original | Unit economics, break-even, binomials, cohort hours and phase totals recomputed by script | First run found the Phase 0 high total written as 321; corrected to 322 (now 337 after round 1) |
+| SC-07 | Brief fidelity | Chat figures quoted exactly: 149 / 299 / 599, margin 82%, break-even 6 (37), 250 → 20 → 8 → 2, 20 days, refund under USD 1,000, stop under USD 100 over 10 shops | Departures listed in section 7 |
+| SC-08 | Arithmetic, fix round 1 | Base ramp at 75% continuation, downside ramp, 357-shop fallback, break-even 7 and 40, build cost range, refund and gate C illustrations, 12.8 reconciliation, phase totals 275 to 337 and 332 to 488 recomputed by script from the rules printed in Decision 7.4 | Equal to the text |
+| SC-09 | Withdrawn claims | Searched the ten files for the allow-list, batch approval, browser session storage and the gross refund wording | Round 1 result was wrong: batch approval remained in T-4.1.3 and R-19, found by the reviewer. Removed on 2026-11-11 and the search rerun: the terms now appear only in prohibitions and in records of their removal |
+| SC-10 | Round 2 residues | Links, identifiers and arithmetic rerun after the edits; UT-11 variants recomputed by hand (450000 / 150 = 3000; 700000 / 150 = 4667) | Pass; T-0.2.3 wording aligned with video demos |
+
+## 7. Open items that documents cannot close
+
+| Item | Why it stays open | What closes it |
+|---|---|---|
+| Whether shops collect incremental cash | No pilot has run | Gate C ([Decision section 9](Decision.md#9-stop-rule)) |
+| Whether any shop will pay USD 149 | No conversation has happened | Gate B |
+| Supportable missed dollars per closed RO | The only stated rate implies USD 30 per repair | Gate A |
+| False-stop probability of gate C, first limb | No variance of shop totals or baselines exists | Pilot data |
+| Estimate-data licence position (LQ-01) | CCC pages blocked, Audatex not found, Mitchell product licence not public | Licence text from each shop; counsel |
+| OEM citation, link and page rights (LQ-02) | One OEM read; whether a citation is itself disclosure is a legal judgement | Each publisher's terms; counsel |
+| Telephone solicitor registration and its fee (LQ-03) | Statute read in an archive capture; the registration itself is an act, not a document | Department of Licensing; counsel |
+| Sales tax and nexus (LQ-04), entry for sales visits (LQ-05), privacy law (LQ-06) | Not verified at source | Accountant, counsel |
+| Current text of WAC 284-30-390, -320, -380 and all Washington statutes cited | Official host unreachable; some captures predate the 2026 amendment | Reading the live official pages |
+| Law on a request to an insurer for work not performed | No source consulted | Counsel |
+| Licensed content inside photos or pasted text | Cannot be detected by the planned product | Residual risk; shop's responsibility; takedown |
+| Qualified prospect count | Only an industry-code upper bound exists | T-0.1.3 |
+| Parser accuracy | No parser exists | WQ-1 on the fixture set |
+
+**Departures from the brief, in one place:** SupplementAI's scope and VaraFix's public price ([Decision section 3](Decision.md#3-competitor-overlap-what-was-read-today)); procedure upload and procedure-based AI drafting not in the MVP (Decision 3.1); email sign-in replaced by password plus TOTP and Google sign-in deferred (TRD AD-11); founder hours 115.3 per cohort instead of 80 per 30 days (Decision 12.4); build 332 to 488 hours instead of 160 (execution plan section 5); stop rule revised and labelled as a change, and the research roadmap's week-1 and week-2 gates kept only as measures (Decision section 9); refund measured on incremental approved dollars at day 60 with collected reported at day 90 (Decision 5.1); a 75% continuation rate added to the model (Decision 6); one closed RO for the free test (chat) rather than two (research); CCC-only parser first; the 14-day trial, 15% annual discount and "launch price 199" not adopted (Decision section 6); the backup channel of estimator Facebook groups and the referral and distributor-partner programme not used (Decision 12.3); phone script without price (Decision 12.5).
+
+## 8. Outstanding items
+
+| Item | Owner | Blocks | Status |
+|---|---|---|---|
+| FD-01 accept revised gates | Founder | Week 1 | Open |
+| FD-02 hosting choice | Founder | Phase 2 | Open |
+| FD-03 commit Phases 1 to 3 before a cash reading | Founder | Week 13 | Open |
+| LQ-01 estimate sharing and AI under shop licences (T-0.1.2) | Founder, Counsel | Any real estimate; AI-1, AI-2 | Open, unverified |
+| LQ-02 OEM citation, link and page rights (T-0.1.2) | Counsel | Citations per publisher | Open, unverified beyond Toyota |
+| LQ-03 solicitor registration (T-0.1.1) | Founder, Counsel | First call | Open; default is to register |
+| LQ-04 tax (T-0.1.5); LQ-05 border entry (T-0.1.6); LQ-06 privacy (T-0.1.7) | Accountant, Counsel | First invoice; first visit; first real estimate | Open, unverified |
+| Counsel, accountant and registration costs | Founder | Cash plan | Missing input, not in the ramp |
+| Live official Washington texts | Author or reviewer with access | Confidence in section 2 of Decision | Open; archive captures only |
+| F-002 part: gate C first-limb false stop | Founder | Reading gate C | Open until pilot variance data exists |
+| F-005 part: LQ-01, LQ-02 licence texts and counsel | Founder, Counsel | Real estimates; citations | Open |
+| F-006 part: LQ-03 answer and registration fee | Founder, Counsel | First call | Open |
+| F-009 part: counsel, accountant and registration costs | Founder | Cash plan | Missing inputs |
+| F-010 part: answers to LQ-01 to LQ-06 | Counsel, Accountant | The steps each task gates | Open |
+| F-012 part: live official Washington text | Anyone with access | Section 2 of Decision | Open; host refused again on 2026-11-11 |
+| Round 2 residue edits | Lead | Release | Checked by the lead, not re-reviewed |
