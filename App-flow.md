@@ -105,7 +105,7 @@ Inside an RO, a step bar (Documents, Lines, Packet, Ledger) shows which steps ar
 - **Story:** as an Estimator I download the packet, send it myself and record that.
 - **Visible:** status Frozen, Sent or Superseded; PDF preview and download; email draft with Copy; SHA-256 short code; "SupplementPacket does not send this for you."
 - **Actions:** Download PDF; Copy email text; **Mark as sent** (date, channel; confirmation repeats line count and total); Undo sent (within 24 hours, with reason); Correct or supersede → new draft from this packet on S-06.
-- **Acceptance:** while the PDF renders the page shows "Building PDF…" and Mark as sent is disabled; a sent date in the future is refused; superseding keeps the old packet readable and labelled.
+- **Acceptance:** while the PDF renders the page shows "Building PDF…" and Mark as sent is disabled; a sent date in the future, or before the packet was frozen, is refused; superseding keeps the old packet readable and labelled.
 
 ### S-10 RO ledger
 - **Story:** as an Estimator I record what the insurer answered; as Office I record what was paid.

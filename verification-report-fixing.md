@@ -43,7 +43,7 @@ Definitions are in the [test catalogue](execution-plan.md#7-test-catalogue). Res
 | Ledger evidence | UT-10, UT-17, UT-18 | B1: Pass |
 | Migrations and recovery | IT-07, IT-08, IT-09, IT-14, IT-17 | B1: IT-07 Pass (scripts, no CI); others Not run |
 | Files, retention, links, logging, licensed-material controls | IT-10, IT-11, IT-12, IT-13, IT-15, IT-19 | B1: IT-11, IT-12, IT-13, IT-15, IT-19 Pass (IT-12, IT-13 adapted); IT-10 Not run |
-| Workflows | E2E-01 to E2E-09 | B1: E2E-01, E2E-02, E2E-04, E2E-06 Pass at API level only; E2E-09 Pass adapted; others Not run |
+| Workflows | E2E-01 to E2E-09 | B1: E2E-01, E2E-02, E2E-06 Pass at API level only; E2E-04 Pass at API level for the freeze double-submit only; E2E-09 Pass adapted; others Not run |
 | Accessibility (manual, [design section 8](design.md#8-accessibility-map)) | T-6.1.3 | Not run |
 | Security controls ([TRD 11.3](TRD.md#113-threat-model)) | T-6.1.4 | Not run |
 | Load and restore targets ([TRD section 10](TRD.md#10-quality-requirements)) | T-6.1.5, T-7.1.1 | Not run |
@@ -264,3 +264,57 @@ Author checks are not review findings and do not use `F-` identifiers.
 - Diff pairing: a shop line pairs with an insurer line of the same operation and the same normalised description or part number; no candidate on a free-text (`other`, no part number) line, or two or more candidates, gives `needs_review`. Insurer-only lines produce nothing. A part-type change produces a `part_type_difference` line even when the price gap is 0.
 
 **Risk register.** Rows R-01, R-02, R-03, R-04, R-05, R-07, R-08, R-10, R-12, R-13, R-16, R-17 and R-19 now cite the B1 test that covers them. No other row changed.
+
+### 9.1 Fix round 1 (2026-11-12)
+
+Independent code review round 1 (`_coordination/review/supplementpacket-b1-round1.md`): 0 blockers, 6 majors, 5 minors. The lead's rulings were applied. Fixes are by the developer; **none is re-reviewed yet**. Each defect has a permanent regression test. Migration `20261112_0002` adds the fields (expand only).
+
+| Finding | Status | Fix | Regression test |
+|---|---|---|---|
+| B1-001 major | Fixed | The pilot report groups each RO's supersede chain. The chain qualifies when any packet in it was sent in days 1 to 30, and it counts once, under its first in-window packet. Amounts come from the live packet (carried responses, re-pointed payments), limited to lines that were requested in a packet sent in the window | `integration/test_fix_round1.py::test_b1_001_*`: v2 frozen but not sent, and v2 sent on day 41. A stays 20000 and the chain counts once |
+| B1-002 major | Fixed | An approval counts in A only with a response date inside days 1 to 60 and a response document uploaded by day 60. Excluded approvals are listed with a reason. A response date in the future is refused, and `response_recorded_at` is stored | `test_b1_002_*` |
+| B1-003 major | Fixed | Added `pilots.baseline_counts_supplied_at` (set when both baseline counts are first present), `pilots.vendor_late_draft_count` with recorded time and recorder (Operator only, `PATCH /pilots/{id}/vendor-late-drafts`), and `users.display_name`, which the PDF now shows. A condition with missing inputs is `undetermined`, and so is the refund result, unless another input already makes it definitely not due | `unit/test_ledger_pilot.py::test_b1_003_*`; `integration/test_fix_round1.py::test_b1_003_*` (includes the UT-11 late-draft variant through the API, and the approver name in the PDF) |
+| B1-004 major | Fixed; Decision 5.1 and PRD 11 corrected | Baseline = max(complete rows scaled to S, the highest-row valuation). In the second candidate, each incomplete or missing row is valued at the highest complete row, or at its own supplied amount if that is higher. Both candidates are shown in the flags | `unit/test_ledger_pilot.py::test_b1_004_*` (reviewer cases a02 = 110000 and a03 = 420000). UT-11 and its variants unchanged |
+| B1-005 major | Fixed; E2E-06 rewritten | A line in the live packet that the new version no longer requests is copied into the new version as `request_state='withdrawn'`, with its amount, outside the requested total, line count and request. The email says how many lines were withdrawn, and the PDF lists them separately. The ledger shows the withdrawn amount. An insurer response on a withdrawn line is refused | `test_e2e06_b1_005_*` |
+| B1-006 major | Fixed | A membership trigger resets every line a user approved when that user's Owner or Estimator role is changed or removed. Freeze also rechecks, under its lock, that each approver is an active Owner or Estimator. If not, it returns 409 and resets those lines in a committed transaction | `test_b1_006_*` (demoted, disabled, removed) |
+| B1-007 minor | Fixed | The rate and the expected amount are rounded up. The increment shown is A minus the expected amount shown, which is the exact increment rounded down. A half cent can no longer deny a refund, and the report is consistent | `unit/test_ledger_pilot.py::test_b1_007_*` |
+| B1-008 minor | Fixed, with a stated limit | The guard now catches a trailing `$`/`USD` and spelled-out amounts ("fifteen hundred dollars"). **Limit:** a bare number with no symbol and no currency word ("storage 1500") is not detected | `unit/test_core_rules.py::test_b1_008_*` |
+| B1-009 minor | Fixed | Money fields accept only a JSON integer or a string of digits. Floats, bools and decimal strings get 422. Hours must be finite with at most 2 decimals. A missing or ill-typed field gets 422, not 500 | `test_b1_009_*` |
+| B1-010 minor | Fixed | `sent_on` after today or before the freeze date (tenant time zone) is refused. Payment dates in the future are refused | `test_b1_010_*` |
+| B1-011 minor | Fixed in part | Free text is length-capped (for example explanation 2000, email paragraph 1000, description 300). Responses that carry user free text, and the packet review, return the notice not to paste procedure or guide text. **Still open:** photo re-encoding and location-metadata removal (MH-05, T-4.2.1) are not implemented | `test_b1_011_*` |
+| IT-03 note | Fixed | The advisory lock is now taken before the existence check. Concurrent uploads of one file under four keys all get the same document | `test_it03_concurrent_uploads_return_one_document` |
+
+**Rules in section 9 superseded by these fixes:**
+- Rounding is now shop-favour (B1-007).
+- Condition (a) uses the recorded counts time.
+- Condition (b) uses the vendor-late record.
+- Undated approvals are excluded.
+- The approver name is now stored.
+
+**Reviewer scripts re-run after the fixes** (`_coordination/review/supplementpacket-b1-*.py`, unchanged):
+- **Now as required:** a02 (110000), a03, a04 (all refused), a05 (sound), a06 (409), a09 (withdrawn 5000), a10 (422), a13 (sound), every input case (422), it03 (one document for both key patterns), worker no-web (passes).
+- **Fail in the script, as the rulings require:**
+  - a01: the script supplies no counts time, so the result is undetermined. With the inputs recorded it is due; see `test_b1_007`.
+  - a07, a08, a12: the script hard-codes September sent dates before the freeze, which B1-010 refuses. a07 and a08 are covered by date-relative regression tests.
+  - a11: the 15 kB paste is now refused with 422.
+
+**Final run (2026-11-12, test database dropped and re-migrated first):**
+
+| Check | Result |
+|---|---|
+| `make test` | 77 passed, 0 failed (28 unit, 49 integration) |
+| `make lint` | 0 findings |
+| `make typecheck` (mypy strict) | 0 issues in 48 files |
+| `make boundaries` | 0 violations |
+| `make heads` | 1 head (`20261112_0002`) |
+| `make parity` | 0 differences; 11 integrity triggers present |
+
+**Documents changed in this round:**
+- Decision 5.1: baseline formula with worked arithmetic, rounding rule, undetermined results, A rule, chain rule.
+- PRD section 11.
+- execution-plan: UT-11 text, E2E-06.
+- App-flow S-09: sent date not before the freeze.
+- schema.md: new fields and the trigger.
+- TRD 8.1: vendor-late endpoint, freeze recheck.
+- AGENTS section 11.
+- This section.

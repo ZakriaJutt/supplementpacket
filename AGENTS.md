@@ -96,7 +96,8 @@ Search here before adding a helper (R-03). Each lives once; `scripts/check_bound
 
 | Need | Module | Notes |
 |---|---|---|
-| Parse, format and round money | `packages/core/src/sp_core/money.py` | Integer cents; exact half-up rounding from `Fraction`; never floats |
+| Parse, format and round money; accept money input | `packages/core/src/sp_core/money.py` | Integer cents; exact half-up rounding, and `round_up`/`round_down` for shop-favour rounding in the refund test; `cents_from_input` refuses floats; never floats |
+| Request input checks, free-text caps and notice | `apps/api/src/sp_api/services/inputs.py` | 422 on any untyped, missing or oversized field |
 | Business days, pilot day boundaries | `packages/core/src/sp_core/dates.py` | Weekends only; no holiday calendar in B1 |
 | Settings (both processes) | `packages/core/src/sp_core/settings.py` | Refuses to start without `PUBLIC_BASE_URL`, `DATABASE_URL`, `STORAGE_BUCKET`, `SESSION_KEY` |
 | Totals reconciliation | `packages/core/src/sp_core/reconcile.py` | Tolerance USD 0.01 |
@@ -113,7 +114,7 @@ Search here before adding a helper (R-03). Each lives once; `scripts/check_bound
 | Packet renderer interface | `packages/files/src/sp_files/render.py` | Deterministic stand-in only in B1 |
 | Parser interface and registry | `packages/parsers/src/sp_parsers/__init__.py` | No real parser yet (T-3.1.3 blocked) |
 | ORM models, tenant transaction | `packages/db/src/sp_db/models.py`, `session.py` | `tenant_transaction` sets tenant, user, role and correlation ID |
-| Approval reset, immutability, append-only audit | Migration `20261111_0001` (SQL functions and triggers) | `sp_reset_line` is the one reset function |
+| Approval reset, immutability, append-only audit | Migrations `20261111_0001`, `20261112_0002` (SQL functions and triggers) | `sp_reset_line` is the one reset function; approver demotion resets approvals |
 
 | Command | State | What it does |
 |---|---|---|
