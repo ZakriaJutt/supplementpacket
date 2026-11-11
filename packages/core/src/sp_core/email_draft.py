@@ -14,11 +14,19 @@ from sp_core.money import MoneyFormatError, format_cents, parse_cents
 
 __all__ = ["EmailDraft", "build_email_draft", "foreign_amounts"]
 
-# Currency amounts: "USD 1,500", "$1,500.00", "1500 dollars", "US$ 12".
+# Currency amounts: "USD 1,500", "$1,500.00", "1500 dollars", "US$ 12", "1500$" (B1-008).
 _AMOUNT_PATTERNS = (
     re.compile(r"(?:USD|US\$|\$)\s?(-?\d[\d,]*(?:\.\d{1,2})?)", re.IGNORECASE),
-    re.compile(r"(-?\d[\d,]*(?:\.\d{1,2})?)\s?(?:USD|dollars?|bucks)\b", re.IGNORECASE),
+    re.compile(r"(-?\d[\d,]*(?:\.\d{1,2})?)\s?(?:USD|US\$|\$|dollars?|bucks)(?![A-Za-z])", re.IGNORECASE),
 )
+# Spelled-out amounts ("fifteen hundred dollars") are refused outright: they cannot equal the
+# requested total as the product writes it. Amounts with neither a symbol nor a currency word
+# ("storage 1500") are not detected; this limit is recorded in verification section 9.
+_NUMBER_WORDS = (
+    "a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
+    "seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|and|a few|several"
+)
+_SPELLED = re.compile(rf"\b(?:(?:{_NUMBER_WORDS})[\s-]+)+(?:dollars?|bucks|usd)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -44,6 +52,7 @@ def foreign_amounts(text: str, allowed_cents: int) -> list[str]:
                 continue
             if cents != allowed_cents:
                 found.append(match.group(0).strip())
+    found.extend(m.group(0).strip() for m in _SPELLED.finditer(text))
     return sorted(set(found))
 
 
@@ -54,6 +63,7 @@ def build_email_draft(
     line_count: int,
     requested_total_cents: int,
     free_paragraph: str | None,
+    withdrawn_count: int = 0,
 ) -> EmailDraft:
     claim = f", claim {claim_number}" if claim_number else ""
     header = (
@@ -62,6 +72,11 @@ def build_email_draft(
         f"{format_cents(requested_total_cents, currency=True)} (excluding sales tax). "
         "The supplement packet is attached."
     )
+    if withdrawn_count:
+        header += (
+            f" This version withdraws {withdrawn_count} line{'s' if withdrawn_count != 1 else ''} of the previous request;"
+            " withdrawn lines are listed in the packet and are not requested."
+        )
     paragraph = (free_paragraph or "").strip()
     text = header if not paragraph else f"{header}\n\n{paragraph}"
     problems = tuple(f"amount not allowed in the email draft: {amount}" for amount in foreign_amounts(paragraph, requested_total_cents))

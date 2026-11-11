@@ -60,3 +60,35 @@ def round_half_up(value: Fraction | Decimal | int) -> int:
 def hours_times_rate_cents(hours: Decimal, rate_cents: int) -> int:
     """Hours (numeric(6,2)) times an hourly rate in cents, rounded half up once."""
     return round_half_up(Fraction(hours) * rate_cents)
+
+
+def round_down(value: Fraction | Decimal | int) -> int:
+    """Floor of an exact value (towards minus infinity)."""
+    exact = Fraction(value)
+    return exact.numerator // exact.denominator
+
+
+def round_up(value: Fraction | Decimal | int) -> int:
+    """Ceiling of an exact value (towards plus infinity)."""
+    exact = Fraction(value)
+    return -((-exact.numerator) // exact.denominator)
+
+
+def cents_from_input(value: object, *, field: str = "amount", allow_negative: bool = False) -> int:
+    """Accept integer cents as a JSON integer or a string of digits; refuse floats, bools, decimals (B1-009)."""
+    if isinstance(value, bool) or value is None:
+        raise MoneyFormatError(f"{field} must be integer cents")
+    if isinstance(value, int):
+        cents = value
+    elif isinstance(value, str) and re.fullmatch(r"-?\d{1,15}", value.strip()):
+        cents = int(value.strip())
+    else:
+        raise MoneyFormatError(f"{field} must be integer cents (a JSON integer or a string of digits), not {type(value).__name__}")
+    if cents < 0 and not allow_negative:
+        raise MoneyFormatError(f"{field} cannot be negative")
+    if abs(cents) > 10**15:
+        raise MoneyFormatError(f"{field} is out of range")
+    return cents
+
+
+__all__ += ["cents_from_input", "round_down", "round_up"]

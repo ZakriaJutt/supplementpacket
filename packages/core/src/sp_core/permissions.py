@@ -31,6 +31,7 @@ class Action(StrEnum):
     RECORD_PAYMENT = "record_payment"
     EDIT_BASELINE = "edit_baseline"
     TAKEDOWN = "takedown"
+    RECORD_VENDOR_DRAFTS = "record_vendor_drafts"
 
 
 _ALL = frozenset(Role)
@@ -49,6 +50,7 @@ PERMISSIONS: dict[Action, frozenset[Role]] = {
     Action.RECORD_PAYMENT: frozenset({Role.OWNER, Role.OFFICE}),
     Action.EDIT_BASELINE: frozenset({Role.OWNER, Role.OFFICE}),
     Action.TAKEDOWN: frozenset({Role.OWNER}),
+    Action.RECORD_VENDOR_DRAFTS: frozenset({Role.OPERATOR}),
 }
 
 
