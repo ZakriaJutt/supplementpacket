@@ -31,6 +31,7 @@ REQUIRED_TRIGGERS = {
     ("packets", "trg_packets_guard"),
     ("packet_lines", "trg_packet_lines_guard"),
     ("payments", "trg_payments_guard"),
+    ("memberships", "trg_memberships_reset_approvals"),
 }
 
 

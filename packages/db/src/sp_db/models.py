@@ -77,6 +77,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     totp_secret_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     totp_enabled_at: Mapped[datetime | None] = mapped_column(TS)
+    display_name: Mapped[str | None] = mapped_column(Text)
     is_operator: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -538,8 +539,14 @@ class PacketLine(Base):
     response_document_id: Mapped[uuid.UUID | None] = mapped_column(UUIDT)
     override_reason: Mapped[str | None] = mapped_column(Text)
     response_recorded_by: Mapped[uuid.UUID | None] = _user_fk()
+    request_state: Mapped[str] = mapped_column(Text, nullable=False, server_default="requested")
+    response_recorded_at: Mapped[datetime | None] = mapped_column(TS)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     __table_args__ = (
+        CheckConstraint("request_state IN ('requested','withdrawn')", name="ck_packet_lines_request_state"),
+        CheckConstraint(
+            "request_state <> 'withdrawn' OR (response_status = 'withdrawn' AND approved_cents = 0)", name="ck_packet_lines_withdrawn"
+        ),
         CheckConstraint(
             "response_status IN ('no_response','approved_full','approved_partial','denied','withdrawn','preapproved')",
             name="ck_packet_lines_response",
@@ -653,6 +660,10 @@ class Pilot(Base):
     baseline_supplemented_ro_count: Mapped[int | None] = mapped_column(Integer)
     window_insurer_ro_count: Mapped[int | None] = mapped_column(Integer)
     counts_source_note: Mapped[str | None] = mapped_column(Text)
+    baseline_counts_supplied_at: Mapped[datetime | None] = mapped_column(TS)
+    vendor_late_draft_count: Mapped[int | None] = mapped_column(Integer)
+    vendor_late_drafts_recorded_at: Mapped[datetime | None] = mapped_column(TS)
+    vendor_late_drafts_recorded_by: Mapped[uuid.UUID | None] = _user_fk()
     created_by: Mapped[uuid.UUID] = _user_fk(nullable=False)
     paid_on: Mapped[date | None] = mapped_column(Date)
     refund_state: Mapped[str | None] = mapped_column(Text)
@@ -661,6 +672,7 @@ class Pilot(Base):
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     __table_args__ = (
         CheckConstraint("refund_state IN ('not_due','due','paid')", name="ck_pilots_refund"),
+        CheckConstraint("vendor_late_draft_count IS NULL OR vendor_late_draft_count >= 0", name="ck_pilots_late_drafts"),
         UniqueConstraint("tenant_id", "location_id", "start_date", name="uq_pilots_start"),
         ForeignKeyConstraint(["tenant_id", "location_id"], ["locations.tenant_id", "locations.id"], name="fk_pilots_location"),
     )
