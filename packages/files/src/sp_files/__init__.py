@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlencode
 
-from sp_files.metadata import MetadataError, strip_metadata
+from sp_files.photos import PhotoError, ReencodedPhoto, reencode_photo
 
 if TYPE_CHECKING:
     from sp_core.settings import Settings
@@ -27,17 +27,18 @@ __all__ = [
     "PURPOSES",
     "LocalObjectStore",
     "MemoryObjectStore",
-    "MetadataError",
     "ObjectStore",
+    "PhotoError",
+    "ReencodedPhoto",
     "S3ObjectStore",
     "build_object_key",
     "build_temp_key",
     "open_store",
+    "reencode_photo",
     "sha256_hex",
     "sign_download_url",
     "sniff_type",
     "store_from_settings",
-    "strip_metadata",
     "verify_download_signature",
 ]
 

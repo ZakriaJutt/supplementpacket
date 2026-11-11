@@ -21,7 +21,7 @@ from sp_obs import configure_logging
 from sp_parsers import ParsedEstimate, ParsedLine, ParserError, clear_registry, register
 from sp_worker.handlers import default_handlers
 from sp_worker.runner import Worker, apply_event
-from tests.conftest import APP_URL, JPEG, SYNTHETIC_PDF, Api, Shop, create_ro
+from tests.conftest import APP_URL, SYNTHETIC_PDF, Api, Shop, create_ro, jpeg
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -170,7 +170,7 @@ def test_it05_bulk_photos_report_per_file_and_retry_adds_none_twice(api: dict[st
     line = est.post(
         f"/ros/{ro['id']}/lines", json={"origin": "manual", "category": "other", "description": "Seam sealer", "requested_cents": 4000}
     ).json()
-    files = [("files", (f"p{i}.jpg", JPEG + f"photo-{i}".encode(), "image/jpeg")) for i in range(7)]
+    files = [("files", (f"p{i}.jpg", jpeg(f"photo-{i}".encode()), "image/jpeg")) for i in range(7)]
     files += [("files", ("bad1.jpg", b"not an image", "image/jpeg")), ("files", ("bad2.jpg", SYNTHETIC_PDF, "image/jpeg"))]
     first = est.post(f"/lines/{line['id']}/photos", files=files, data={"attested": "true", "taken_by_shop": "true"}).json()
     assert (first["attached"], first["rejected"], first["already_attached"]) == (7, 2, 0)

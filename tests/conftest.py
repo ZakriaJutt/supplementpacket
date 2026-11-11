@@ -37,13 +37,24 @@ OWNER_URL = f"postgresql+psycopg://{getpass.getuser()}@localhost:5432/{DB}"
 TODAY = datetime.now(ZoneInfo("America/Los_Angeles")).date()
 PILOT_START = TODAY - timedelta(days=10)
 SYNTHETIC_PDF = b"%PDF-1.4\n% synthetic estimate for tests\n"
-# A structurally valid JPEG (SOI, JFIF APP0, start of scan); bytes appended to it land in the scan data.
-JPEG = (
-    b"\xff\xd8"
-    + b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
-    + b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
-    + b"synthetic-jpeg-"
-)
+
+
+def jpeg(tag: bytes = b"") -> bytes:
+    """A real 16 x 16 JPEG whose pixels derive from ``tag``, so different tags stay different after re-encoding."""
+    import hashlib
+    import io
+
+    from PIL import Image
+
+    seed = hashlib.sha256(tag).digest()
+    img = Image.new("RGB", (16, 16))
+    img.putdata([(seed[(i * 3) % 32], seed[(i * 3 + 1) % 32], seed[(i * 7 + 2) % 32]) for i in range(256)])
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=95)
+    return out.getvalue()
+
+
+JPEG = jpeg(b"default")
 TEST_SESSION_KEY = "test-session-key-not-secret"
 
 

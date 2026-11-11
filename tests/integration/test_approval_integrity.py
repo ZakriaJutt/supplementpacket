@@ -15,7 +15,6 @@ from sqlalchemy import create_engine, text
 from tests.conftest import (
     APP_URL,
     INSURER_LINES,
-    JPEG,
     SHOP_LINES,
     Api,
     Shop,
@@ -24,6 +23,7 @@ from tests.conftest import (
     enter_lines,
     explain,
     freeze,
+    jpeg,
     ro_with_diff,
     upload_estimate,
 )
@@ -41,7 +41,7 @@ def _audit_actions(owner_engine: Any, entity_id: str) -> list[str]:
 def _approved_line_with_evidence(est: Api, ro_id: str, line: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
     photo = est.post(
         f"/lines/{line['id']}/photos",
-        files=[("files", ("a.jpg", JPEG + uuid.uuid4().bytes, "image/jpeg"))],
+        files=[("files", ("a.jpg", jpeg(uuid.uuid4().bytes), "image/jpeg"))],
         data={"attested": "true", "taken_by_shop": "true"},
     )
     assert photo.status_code == 200, photo.text
@@ -104,7 +104,7 @@ def test_ut07_every_change_resets_approval(api: dict[str, Api], shop: Shop, owne
     # 2. add a photo
     r = est.post(
         f"/lines/{target['id']}/photos",
-        files=[("files", ("b.jpg", JPEG + b"second", "image/jpeg"))],
+        files=[("files", ("b.jpg", jpeg(b"second"), "image/jpeg"))],
         data={"attested": "true", "taken_by_shop": "true"},
     )
     assert r.status_code == 200 and r.json()["attached"] == 1
@@ -263,7 +263,7 @@ def test_it18_photo_swap_or_email_edit_after_review_refused(api: dict[str, Api],
     assert op.delete(f"/evidence/{ev_id}").status_code == 200
     r = op.post(
         f"/lines/{target['id']}/photos",
-        files=[("files", ("c.jpg", JPEG + b"replacement", "image/jpeg"))],
+        files=[("files", ("c.jpg", jpeg(b"replacement"), "image/jpeg"))],
         data={"attested": "true", "taken_by_shop": "true"},
     )
     assert r.status_code == 200

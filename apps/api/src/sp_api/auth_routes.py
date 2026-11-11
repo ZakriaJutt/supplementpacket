@@ -29,7 +29,8 @@ def _state(request: Request) -> AppState:
 def _respond(result: auth.SignIn, state: AppState, status: int = 200) -> JSONResponse:
     response = JSONResponse(result.body, status_code=status)
     if result.token:
-        level_minutes = auth.PENDING_MINUTES if result.body.get("next") == "totp" else state.settings.session_absolute_hours * 60
+        staged = result.body.get("next") in ("totp", "choose_tenant")
+        level_minutes = auth.PENDING_MINUTES if staged else state.settings.session_absolute_hours * 60
         response.set_cookie(SESSION_COOKIE, result.token, max_age=level_minutes * 60, path="/", secure=True, httponly=True, samesite="lax")
     if result.clear_cookie:
         response.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
@@ -47,6 +48,12 @@ def login(request: Request, body: JsonBody = Body(...)) -> JSONResponse:
 def totp(request: Request, body: JsonBody = Body(...)) -> JSONResponse:
     state = _state(request)
     return _respond(auth.complete_totp(state, request, body), state)
+
+
+@router.post("/auth/tenant")
+def tenant(request: Request, body: JsonBody = Body(...)) -> JSONResponse:
+    state = _state(request)
+    return _respond(auth.choose_tenant(state, request, body), state)
 
 
 @router.post("/auth/logout")
@@ -74,16 +81,18 @@ def password_reset_confirm(request: Request, body: JsonBody = Body(...)) -> dict
     return auth.confirm_password_reset(_state(request), request, body)
 
 
-@router.get("/invites/{token}")
-def invite(token: str, request: Request) -> dict[str, Any]:
-    return auth.invite_view(_state(request), token)
+# Invitation tokens travel in the body only: the email link carries the token in the URL fragment,
+# which browsers never send to a server, and the page posts it here (B2-S03).
+@router.post("/invites/lookup")
+def invite(request: Request, body: JsonBody = Body(...)) -> dict[str, Any]:
+    return auth.invite_view(_state(request), request, body)
 
 
-@router.post("/invites/{token}/totp-setup")
-def invite_totp(token: str, request: Request) -> dict[str, Any]:
-    return auth.invite_totp_setup(_state(request), request, token)
+@router.post("/invites/totp-setup")
+def invite_totp(request: Request, body: JsonBody = Body(...)) -> dict[str, Any]:
+    return auth.invite_totp_setup(_state(request), request, body)
 
 
-@router.post("/invites/{token}/accept")
-def invite_accept(token: str, request: Request, body: JsonBody = Body(...)) -> JSONResponse:
-    return JSONResponse(auth.accept_invite(_state(request), request, token, body), status_code=201)
+@router.post("/invites/accept")
+def invite_accept(request: Request, body: JsonBody = Body(...)) -> JSONResponse:
+    return JSONResponse(auth.accept_invite(_state(request), request, body), status_code=201)

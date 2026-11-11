@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 __all__ = [
+    "AccessLogFilter",
     "JsonFormatter",
     "configure_logging",
     "correlation_id",
@@ -24,6 +25,7 @@ __all__ = [
     "get_logger",
     "new_correlation_id",
     "redact",
+    "safe_request_target",
     "set_correlation_id",
 ]
 
@@ -127,6 +129,31 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str, sort_keys=True)
 
 
+_TOKENISH = re.compile(r"[A-Za-z0-9_\-]{32,}")
+
+
+def safe_request_target(target: str) -> str:
+    """A request target fit for an access log: no query string, long token-like segments replaced."""
+    path = target.split("?", 1)[0].split("#", 1)[0]
+    return "/".join("[redacted]" if _TOKENISH.fullmatch(part) and not _is_uuid(part) else part for part in path.split("/"))
+
+
+def _is_uuid(part: str) -> bool:
+    """Record identifiers stay readable; they are not secrets (opaque UUIDs, TRD 8.8)."""
+    return bool(re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", part))
+
+
+class AccessLogFilter(logging.Filter):
+    """Applied to ``uvicorn.access``: the server's access log never records a query string (signed-link
+    signatures) or a token-like path segment (B2-S03, ASVS 14.2.1 and 16.2.5)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            record.args = (*args[:2], safe_request_target(args[2]), *args[3:])
+        return True
+
+
 def configure_logging(level: str = "INFO", stream: Any = None) -> None:
     root = logging.getLogger()
     for handler in list(root.handlers):
@@ -137,6 +164,9 @@ def configure_logging(level: str = "INFO", stream: Any = None) -> None:
     handler._sp_handler = True  # type: ignore[attr-defined]
     root.addHandler(handler)
     root.setLevel(level)
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, AccessLogFilter) for f in access.filters):
+        access.addFilter(AccessLogFilter())
 
 
 def get_logger(name: str) -> logging.Logger:

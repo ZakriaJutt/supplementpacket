@@ -15,7 +15,7 @@ from sp_db.models import TENANT_TABLES
 from sp_files import MemoryObjectStore
 from sp_worker.handlers import default_handlers
 from sp_worker.runner import Worker
-from tests.conftest import APP_URL, JPEG, SYNTHETIC_PDF, Api, Shop, approve_all, freeze, ro_with_diff
+from tests.conftest import APP_URL, JPEG, SYNTHETIC_PDF, Api, Shop, approve_all, freeze, jpeg, ro_with_diff
 
 
 def _build_b(api_b: Api, shop_b: Shop, owner_engine: Any) -> dict[str, str]:
@@ -23,7 +23,7 @@ def _build_b(api_b: Api, shop_b: Shop, owner_engine: Any) -> dict[str, str]:
     line = lines[0]
     photo = api_b.post(
         f"/lines/{line['id']}/photos",
-        files=[("files", ("p.jpg", JPEG + b"b-shop", "image/jpeg"))],
+        files=[("files", ("p.jpg", jpeg(b"b-shop"), "image/jpeg"))],
         data={"attested": "true", "taken_by_shop": "true"},
     ).json()["results"][0]
     ref = api_b.post(
@@ -245,7 +245,7 @@ def test_it15_licensed_material_controls(client: TestClient, api: dict[str, Api]
     accepted = est.post(f"/lines/{line['id']}/references", json={**base, "material_type": "oem_procedure_subscription"})
     assert accepted.status_code == 201
     no_tick = est.post(
-        f"/lines/{line['id']}/photos", files=[("files", ("x.jpg", JPEG + b"1", "image/jpeg"))], data={"taken_by_shop": "true"}
+        f"/lines/{line['id']}/photos", files=[("files", ("x.jpg", jpeg(b"1"), "image/jpeg"))], data={"taken_by_shop": "true"}
     )
     assert no_tick.status_code == 422
     pdf_as_photo = est.post(

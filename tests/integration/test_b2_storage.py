@@ -119,10 +119,10 @@ def test_b2_upload_download_one_tenant_refused_for_another(
         data={"attested": "true", "taken_by_shop": "true"},
     )
     result = r.json()["results"][0]
-    assert result["status"] == "attached" and result["metadata_blocks_removed"] == 1, result
+    assert result["status"] == "attached" and result["metadata"] == "none: re-encoded from pixels", result
     served = est.get(f"/photos/{result['photo_id']}/content")
     assert served.status_code == 200 and b"SYNTHETIC-GPS" not in served.content and b"Exif" not in served.content
-    assert served.content.startswith(b"\xff\xd8\xff\xe0")  # JFIF kept, still a JPEG
+    assert served.content.startswith(b"\xff\xd8\xff\xe0")  # a fresh baseline JFIF file
     with owner_engine.connect() as conn:
         pkey = conn.execute(text("SELECT storage_key FROM photos WHERE id = :p"), {"p": result["photo_id"]}).scalar()
     assert b"SYNTHETIC-GPS" not in s3.get(pkey)

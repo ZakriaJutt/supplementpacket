@@ -445,3 +445,32 @@ Existing tests were moved from bearer tokens to the cookie plus anti-forgery hea
 | `make heads` | 1 head (`20261111_0005`) |
 | `make parity` | 0 differences |
 | `make dev`, then `make stop` | database, storage, mail, API and worker healthy; a seeded Estimator signed in with password and TOTP and signed out |
+
+### 10.1 Security fixes after B2 review, awaiting recheck (2026-11-11)
+
+Review note `_coordination/review/supplementpacket-b2-sec-round1.md` (independent reviewer; 25 attack cases in `supplementpacket-b2-sec_attack.py`: 13 passed, 12 failed against `f5a3b45`). Fixed per the lead's rulings; not yet re-reviewed. Each failing case is kept as a permanent regression test in `tests/integration/test_b2_security.py` (and unit tests in `tests/unit/test_b2_credentials_photos.py`).
+
+| Finding | Fix | Regression tests |
+|---|---|---|
+| B2-S01 major, photo metadata bypass | The segment stripper (`sp_files.metadata`) is removed. Each JPEG or PNG is decoded to pixels with Pillow and re-encoded (`sp_files.photos.reencode_photo`): full decode or refusal; 40-megapixel limit from the header; primary image only (Multi-Picture secondary images dropped); orientation applied first; long edge at most 2,000 pixels; new baseline JPEG or plain PNG with no Exif, XMP, ICC, comment, text or private chunk; output re-read and checked. Only the re-encoded file is stored. The upload result reports `metadata: "none: re-encoded from pixels"`; `metadata_blocks_removed` is gone | `test_b2_s01_crafted_photo_never_stored_with_gps` (the reviewer's six files verbatim, plus two real photos with Exif, trailer and MPF; asserts no GPS bytes in any stored object); unit `test_b2_s01_reencode_removes_every_metadata_shape` (11 shapes on real images: Exif, APP1 between progressive scans, a real MPO whose second image has GPS, hand-made MPF trailer, trailer after EOI, XMP and comment, ICC with GPS, PNG `exIf`, `zxIf`, `caBX`, `tEXt` and `eXIf`), `test_b2_s01_orientation_applied_and_size_limits`, `test_b2_s01_anything_that_does_not_decode_is_refused` |
+| B2-S02 major, reset confirm ignored the lock | Reset confirm reserves a failure slot on the account's lock before checking the code, under the same advisory lock as sign-in; refused with 429 while locked even with the correct code; a wrong code counts toward the lock | `test_b2_s02_reset_confirm_refused_while_locked_even_with_the_right_code` (reviewer A06), `test_b2_s02_reset_confirm_failures_count_toward_the_lock` |
+| B2-S03 major, invitation token in the access log | Invitation and reset tokens travel only in JSON bodies (`POST /invites/lookup`, `/invites/totp-setup`, `/invites/accept`, `/auth/password-reset/confirm`); emailed links carry the token in the URL fragment (`/invite#token=…`, `/reset#token=…`), which browsers never send. `sp_obs.AccessLogFilter` on `uvicorn.access` drops query strings (signed-link signatures) and redacts token-like path segments | `test_b2_s03_tokens_never_reach_the_access_log` (real uvicorn with its access log on; invitation, acceptance, reset request and confirm, a token-shaped path and a `sig` query string; greps the captured log), `test_b2_s03_no_route_takes_a_token_in_its_path` |
+| B2-S04 minor, reset-request timing | The reset email is sent in the background and every reset request is padded to a 250 ms floor | `test_b2_s04_reset_request_takes_the_same_time_known_or_unknown` |
+| B2-S05 minor, lock race | Every count-and-record (rate limits and failure slots) runs under `pg_advisory_xact_lock` per bucket and key; a failure slot is reserved before the check and released only on success | `test_b2_s05_parallel_password_guesses_evaluate_at_most_five` (40 parallel, reviewer A05), `test_b2_s05_parallel_code_guesses_evaluate_at_most_five` (30 parallel, A05b) |
+| B2-S06 minor, claimed IDs without tests | Tests added for each: 5.2.1 caps, 6.2.8 exact verification, 6.2.9 64 to 256 characters, 7.2.3 token entropy, 7.2.4 revocation of a session already in the browser, 7.4.3 logout everywhere, 16.3.1 authentication events logged without email or secret. No claim withdrawn | `test_b2_s06_upload_size_caps`, unit `test_b2_s06_password_length_and_exactness`, unit `test_b2_s06_token_entropy`, `test_b2_s06_login_revokes_a_session_already_in_the_browser`, `test_b2_s06_logout_all_ends_every_session`, `test_b2_s06_authentication_events_are_logged_without_secrets` |
+| B2-S07 minor, shop list before TOTP | The password step returns only `next` and the anti-forgery token; a person with several shops chooses one through `POST /auth/tenant` with a 5-minute `choose_tenant` session after every factor (migration `20261111_0006`) | `test_b2_s07_shop_choice_only_after_every_factor` (reviewer A17) |
+
+ASVS IDs now also implemented: 5.2.6 (40-megapixel limit) and 14.2.1 and 16.2.5 for sign-in tokens and the access log. HEIC stays refused. Pillow 13.0.0 is added to `tools/requirements.txt`. A test that compared TOTP steps by wall-clock offset was made robust to the 30-second boundary (it now reads the step consumed at acceptance).
+
+**Attack script after the fixes** (fresh test database): 24 passed, 1 failed. The failure is A07: the script reads the token from an emailed `/invite/<token>` link and calls `GET /invites/<token>`. Both changed under the B2-S03 ruling (fragment link, token in the body), so the script needs updating; the repository's A07 equivalent passes.
+
+**Final run (2026-11-11, test database dropped and re-migrated first; Mailpit and MinIO running):**
+
+| Check | Result |
+|---|---|
+| `make test` | 131 passed, 0 failed, 0 skipped (50 unit, 81 integration) |
+| `make lint` | 0 findings, 74 files formatted |
+| `make typecheck` (mypy strict) | 0 issues in 57 files |
+| `make boundaries` | 0 violations |
+| `make heads` | 1 head (`20261111_0006`) |
+| `make parity` | 0 differences |

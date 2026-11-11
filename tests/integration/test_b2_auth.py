@@ -40,7 +40,7 @@ def mailbox() -> Iterator[list[str]]:
 
 
 def _read_link(mailbox: list[str], to: str, path: str) -> str:
-    """Wait for the message to ``to`` and return the token from its ``/{path}/<token>`` link."""
+    """Wait for the message to ``to`` and return the token from its ``/{path}#token=<token>`` link."""
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         found = httpx.get(f"{MAILPIT}/search", params={"query": f'to:"{to}"'}, timeout=5).json()["messages"]
@@ -48,7 +48,8 @@ def _read_link(mailbox: list[str], to: str, path: str) -> str:
             mid = found[0]["ID"]
             mailbox.append(mid)
             body = httpx.get(f"{MAILPIT}/message/{mid}", timeout=5).json()["Text"]
-            match = re.search(rf"https://app\.example\.test/{path}/([A-Za-z0-9_\-]+)", body)
+            # The token is in the URL fragment (never sent to a server); no token in any path (B2-S03).
+            match = re.search(rf"https://app\.example\.test/{path}#token=([A-Za-z0-9_\-]+)", body)
             assert match, body
             return match.group(1)
         time.sleep(0.2)
@@ -72,16 +73,16 @@ def _invite_and_accept(
     assert r.status_code == 201, r.text
     token = _read_link(mailbox, email, "invite")
     anon = owner.client
-    view = anon.get(f"/api/v1/invites/{token}")
+    view = anon.post("/api/v1/invites/lookup", json={"token": token})
     assert view.status_code == 200 and view.json()["role"] == role
     secret = None
     body: dict[str, Any] = {"password": password, "display_name": f"Synthetic {role}"}
     if with_totp:
-        setup = anon.post(f"/api/v1/invites/{token}/totp-setup")
+        setup = anon.post("/api/v1/invites/totp-setup", json={"token": token})
         assert setup.status_code == 200 and setup.json()["otpauth_uri"].startswith("otpauth://totp/")
         secret = setup.json()["secret"]
         body["totp_code"] = _code(secret)
-    r = anon.post(f"/api/v1/invites/{token}/accept", json=body)
+    r = anon.post("/api/v1/invites/accept", json={"token": token, **body})
     assert r.status_code == 201, r.text
     assert "set-cookie" not in r.headers  # accepting does not sign in (S-02 -> S-01)
     return email, secret, token
@@ -144,7 +145,9 @@ def test_b2_expired_and_reused_invite_and_code_refused(
     owner = api["owner"]
     email, secret, token = _invite_and_accept(owner, mailbox, "owner")
     assert secret is not None
-    again = owner.client.post(f"/api/v1/invites/{token}/accept", json={"password": "correct horse battery 42", "totp_code": _code(secret)})
+    again = owner.client.post(
+        "/api/v1/invites/accept", json={"token": token, "password": "correct horse battery 42", "totp_code": _code(secret)}
+    )
     assert again.status_code == 410 and "expired" in again.json()["detail"]  # used once
     # An expired invitation shows the S-02 message and accepts nothing.
     late = f"late.{uuid.uuid4().hex[:8]}@example.test"
@@ -155,16 +158,20 @@ def test_b2_expired_and_reused_invite_and_code_refused(
             text("UPDATE invites SET created_at = now() - interval '73 hours', expires_at = now() - interval '1 hour' WHERE email = :e"),
             {"e": late},
         )
-    assert owner.client.get(f"/api/v1/invites/{late_token}").status_code == 410
-    assert owner.client.post(f"/api/v1/invites/{late_token}/accept", json={"password": "correct horse battery 42"}).status_code == 410
-    assert owner.client.get(f"/api/v1/invites/{uuid.uuid4().hex}").status_code == 404
+    assert owner.client.post("/api/v1/invites/lookup", json={"token": late_token}).status_code == 410
+    assert (
+        owner.client.post("/api/v1/invites/accept", json={"token": late_token, "password": "correct horse battery 42"}).status_code == 410
+    )
+    assert owner.client.post("/api/v1/invites/lookup", json={"token": uuid.uuid4().hex}).status_code == 404
     # A TOTP code works once: the step used at acceptance is refused, the next one works once.
     browser = _browser(settings, store)
     first = browser.post("/api/v1/auth/login", json={"email": email, "password": "correct horse battery 42"}).json()
-    used = _code(secret, 0)
+    with owner_engine.connect() as conn:  # the step consumed at acceptance (robust to a 30 s boundary)
+        step = int(conn.execute(text("SELECT totp_last_step FROM users WHERE email = :e"), {"e": email}).scalar())
+    used = totp_code(secret, step)
     assert browser.post("/api/v1/auth/totp", json={"code": used}, headers={"X-CSRF-Token": first["csrf_token"]}).status_code == 401
     assert browser.post("/api/v1/auth/totp", json={"code": "000000"}, headers={"X-CSRF-Token": first["csrf_token"]}).status_code in (401,)
-    nxt = _code(secret, 1)
+    nxt = totp_code(secret, step + 1)
     assert browser.post("/api/v1/auth/totp", json={"code": nxt}, headers={"X-CSRF-Token": first["csrf_token"]}).status_code == 200
     other = _browser(settings, store)
     second = other.post("/api/v1/auth/login", json={"email": email, "password": "correct horse battery 42"}).json()
@@ -178,11 +185,11 @@ def test_b2_office_without_totp_and_weak_password_refused(
     email = f"office.{uuid.uuid4().hex[:10]}@example.test"
     assert owner.post("/users", json={"email": email, "role": "office"}).status_code == 201
     token = _read_link(mailbox, email, "invite")
-    weak = owner.client.post(f"/api/v1/invites/{token}/accept", json={"password": "password1234"})
+    weak = owner.client.post("/api/v1/invites/accept", json={"token": token, "password": "password1234"})
     assert weak.status_code == 422
-    short = owner.client.post(f"/api/v1/invites/{token}/accept", json={"password": "short"})
+    short = owner.client.post("/api/v1/invites/accept", json={"token": token, "password": "short"})
     assert short.status_code == 422
-    assert owner.client.post(f"/api/v1/invites/{token}/accept", json={"password": "office ledger synthetic 7"}).status_code == 201
+    assert owner.client.post("/api/v1/invites/accept", json={"token": token, "password": "office ledger synthetic 7"}).status_code == 201
     browser = _browser(settings, store)
     r = browser.post("/api/v1/auth/login", json={"email": email, "password": "office ledger synthetic 7"})
     assert r.status_code == 200 and r.json()["next"] == "done"  # TOTP optional for Office during the pilot (TRD 8.2)
@@ -191,7 +198,7 @@ def test_b2_office_without_totp_and_weak_password_refused(
     est = f"est.{uuid.uuid4().hex[:10]}@example.test"
     assert owner.post("/users", json={"email": est, "role": "estimator"}).status_code == 201
     est_token = _read_link(mailbox, est, "invite")
-    r = owner.client.post(f"/api/v1/invites/{est_token}/accept", json={"password": "estimator synthetic pass 9"})
+    r = owner.client.post("/api/v1/invites/accept", json={"token": est_token, "password": "estimator synthetic pass 9"})
     assert r.status_code == 422 and r.json()["title"] == "Authenticator required"
 
 
@@ -229,7 +236,9 @@ def test_b2_password_reset_needs_totp_ends_sessions_and_link_works_once(
         fresh = [m for m in found if m["ID"] not in mailbox]
         if fresh:
             mailbox.append(fresh[0]["ID"])
-            second = re.search(r"/reset/([A-Za-z0-9_\-]+)", httpx.get(f"{MAILPIT}/message/{fresh[0]['ID']}", timeout=5).json()["Text"])
+            second = re.search(
+                r"/reset#token=([A-Za-z0-9_\-]+)", httpx.get(f"{MAILPIT}/message/{fresh[0]['ID']}", timeout=5).json()["Text"]
+            )
         else:
             time.sleep(0.2)
     assert second and len(mailbox) == mailbox_before + 1

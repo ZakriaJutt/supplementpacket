@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import smtplib
 import ssl
+from concurrent.futures import ThreadPoolExecutor
 from email.message import EmailMessage
 from email.utils import make_msgid
 from typing import Protocol
@@ -16,7 +17,7 @@ from typing import Protocol
 from sp_core.settings import Settings
 from sp_obs import get_logger
 
-__all__ = ["Mailer", "SmtpMailer"]
+__all__ = ["Mailer", "SmtpMailer", "send_in_background"]
 
 log = get_logger("sp_api.mail")
 
@@ -44,3 +45,18 @@ class SmtpMailer:
                 smtp.login(s.smtp_username, s.smtp_password)
             smtp.send_message(msg)
         log.info("email sent", extra={"subject_kind": subject.split(":", 1)[0]})  # never the address or the link
+
+
+_BACKGROUND = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mail")
+
+
+def send_in_background(mailer: Mailer, *, to: str, subject: str, body: str) -> None:
+    """Send after the request: response time and errors do not depend on the SMTP round trip (B2-S04)."""
+
+    def run() -> None:
+        try:
+            mailer.send(to=to, subject=subject, body=body)
+        except Exception:  # noqa: BLE001 - logged, never raised into a request
+            log.warning("email not sent", extra={"subject_kind": subject.split(":", 1)[0]})
+
+    _BACKGROUND.submit(run)

@@ -137,7 +137,7 @@ class Session(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(TS)
     auth_level: Mapped[str] = mapped_column(Text, nullable=False, server_default="full")  # B2
     __table_args__ = (
-        CheckConstraint("auth_level IN ('password','full')", name="ck_sessions_auth_level"),
+        CheckConstraint("auth_level IN ('password','choose_tenant','full')", name="ck_sessions_auth_level"),
         Index("ix_sessions_user", "user_id"),
     )
 

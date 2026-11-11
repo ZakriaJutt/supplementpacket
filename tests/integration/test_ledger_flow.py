@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sp_files import MemoryObjectStore
 from sp_worker.handlers import default_handlers
 from sp_worker.runner import Worker
-from tests.conftest import JPEG, SYNTHETIC_PDF, TODAY, Api, Shop, approve, approve_all, create_ro, explain, freeze, ro_with_diff
+from tests.conftest import SYNTHETIC_PDF, TODAY, Api, Shop, approve, approve_all, create_ro, explain, freeze, jpeg, ro_with_diff
 
 
 def _mark_sent(est: Api, packet: dict[str, Any], on: str = TODAY.isoformat()) -> Any:
@@ -213,7 +213,7 @@ def test_it19_takedown_purges_files_keeps_amounts(
     target = lines[0]
     est.post(
         f"/lines/{target['id']}/photos",
-        files=[("files", ("s.jpg", JPEG + b"procedure-screenshot", "image/jpeg"))],
+        files=[("files", ("s.jpg", jpeg(b"procedure-screenshot"), "image/jpeg"))],
         data={"attested": "true", "taken_by_shop": "true"},
     )
     approve_all(est, ro["id"])
@@ -260,7 +260,7 @@ def test_e2e01_core_path_three_totals(settings: Any, api: dict[str, Api], shop: 
     ).json()
     est.post(
         f"/lines/{checklist_line['id']}/photos",
-        files=[("files", ("scan.jpg", JPEG + b"scan", "image/jpeg"))],
+        files=[("files", ("scan.jpg", jpeg(b"scan"), "image/jpeg"))],
         data={"attested": "true", "taken_by_shop": "true"},
     )
     excluded = next(x for x in lines if x["category"] == "part_type_difference")
