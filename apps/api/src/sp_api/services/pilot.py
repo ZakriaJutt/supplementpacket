@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from fractions import Fraction
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,11 +14,12 @@ from sqlalchemy.orm import Session
 from sp_api.context import Ctx, Problem
 from sp_api.services import inputs
 from sp_api.services.common import check_version, get_or_404, lock_or_404, to_dict
-from sp_core.dates import pilot_day_date, pilot_day_end
+from sp_core.dates import business_days_between, pilot_day_date, pilot_day_end
 from sp_core.ledger import SUPPLEMENT_PAYMENT_KINDS
 from sp_core.permissions import Action
 from sp_core.pilot import (
     BaselineRow,
+    CountEvent,
     PilotCounts,
     PilotPacket,
     PilotTerms,
@@ -25,9 +27,29 @@ from sp_core.pilot import (
     pm2_checklist_collected,
     refund_test,
 )
-from sp_db.models import BaselineRo, Document, Location, Packet, PacketLine, Payment, Pilot, RepairOrder, Tenant
+from sp_db.models import (
+    BaselineRo,
+    Document,
+    Location,
+    Packet,
+    PacketLine,
+    Payment,
+    Pilot,
+    PilotCountEvent,
+    RepairOrder,
+    Tenant,
+    VendorLateDraft,
+)
 
-__all__ = ["add_baseline_row", "list_baseline", "pilot_report", "set_counts", "set_vendor_late_drafts"]
+__all__ = [
+    "add_baseline_row",
+    "add_vendor_late_draft",
+    "complete_vendor_late_drafts",
+    "list_baseline",
+    "pilot_report",
+    "set_counts",
+    "vendor_drafts_view",
+]
 
 
 def add_baseline_row(ctx: Ctx, db: Session, body: dict[str, Any]) -> dict[str, Any]:
@@ -70,45 +92,95 @@ COUNT_KEYS = ("baseline_insurer_ro_count", "baseline_supplemented_ro_count", "wi
 
 
 def set_counts(ctx: Ctx, db: Session, pilot_id: uuid.UUID, body: dict[str, Any], if_match: int | None) -> dict[str, Any]:
+    """Every change to a count is recorded as an append-only event (B1-003, fix round 2)."""
     pilot = lock_or_404(db, Pilot, pilot_id)
     ctx.require(Action.EDIT_BASELINE, "pilot", pilot.id)
     check_version(pilot, if_match)
     before = to_dict(pilot)
+    now = datetime.now(UTC)
+    changed = False
     for key in COUNT_KEYS:
         if key in body:
-            setattr(pilot, key, inputs.an_int(body, key))
+            value = inputs.an_int(body, key)
+            if value != getattr(pilot, key):
+                setattr(pilot, key, value)
+                db.add(
+                    PilotCountEvent(
+                        tenant_id=ctx.tenant_id, pilot_id=pilot.id, field=key, value=value, recorded_at=now, recorded_by=ctx.user_id
+                    )
+                )
+                changed = True
     if "counts_source_note" in body:
         pilot.counts_source_note = inputs.text_field(body, "counts_source_note")
-    if (
-        pilot.baseline_counts_supplied_at is None
-        and pilot.baseline_insurer_ro_count is not None
-        and pilot.baseline_supplemented_ro_count is not None
-    ):
-        # When the two baseline counts were first both supplied: condition (a) needs it (B1-003).
-        pilot.baseline_counts_supplied_at = datetime.now(UTC)
+    if changed and key_changed(before, pilot):
+        pilot.baseline_counts_supplied_at = now  # time of the latest change to a baseline count
     pilot.row_version += 1
     db.flush()
     keys = (*COUNT_KEYS, "baseline_counts_supplied_at")
     ctx.audit(db, "pilot.counts_set", "pilot", pilot.id, {k: before[k] for k in keys}, {k: to_dict(pilot)[k] for k in keys})
-    return to_dict(pilot)
+    return {**to_dict(pilot), "count_history": count_history_view(db, pilot.id)}
 
 
-def set_vendor_late_drafts(ctx: Ctx, db: Session, pilot_id: uuid.UUID, body: dict[str, Any], if_match: int | None) -> dict[str, Any]:
-    """The vendor records how many drafts it returned later than 1 business day (condition (b), B1-003)."""
+def key_changed(before: dict[str, Any], pilot: Pilot) -> bool:
+    return (before["baseline_insurer_ro_count"], before["baseline_supplemented_ro_count"]) != (
+        pilot.baseline_insurer_ro_count,
+        pilot.baseline_supplemented_ro_count,
+    )
+
+
+def count_history_view(db: Session, pilot_id: uuid.UUID) -> list[dict[str, Any]]:
+    rows = db.execute(select(PilotCountEvent).where(PilotCountEvent.pilot_id == pilot_id).order_by(PilotCountEvent.id)).scalars()
+    return [{"field": e.field, "value": e.value, "recorded_at": e.recorded_at.isoformat(), "recorded_by": str(e.recorded_by)} for e in rows]
+
+
+def add_vendor_late_draft(ctx: Ctx, db: Session, pilot_id: uuid.UUID, body: dict[str, Any]) -> dict[str, Any]:
+    """The vendor records one late draft: reference, request and return times, recorder (B1-003)."""
+    pilot = get_or_404(db, Pilot, pilot_id)
+    ctx.require(Action.RECORD_VENDOR_DRAFTS, "pilot", pilot.id)
+    reference = inputs.text_field(body, "draft_reference", required=True, limit=100)
+    requested_at = inputs.a_datetime(body, "requested_at")
+    returned_at = inputs.a_datetime(body, "returned_at", required=False)
+    assert requested_at is not None
+    now = datetime.now(UTC)
+    if requested_at > now or (returned_at is not None and (returned_at < requested_at or returned_at > now)):
+        raise Problem(422, "Invalid draft times", "requested and returned times must be in the past, returned after requested")
+    tz = ZoneInfo(db.execute(select(Tenant)).scalar_one().timezone)
+    end = (returned_at or now).astimezone(tz).date()
+    if business_days_between(requested_at.astimezone(tz).date(), end) <= 1:
+        raise Problem(422, "Not late", "the draft was returned within 1 business day")
+    row = VendorLateDraft(
+        tenant_id=ctx.tenant_id,
+        pilot_id=pilot.id,
+        draft_reference=reference,
+        requested_at=requested_at,
+        returned_at=returned_at,
+        note=inputs.text_field(body, "note"),
+        recorded_by=ctx.user_id,
+    )
+    db.add(row)
+    db.flush()
+    ctx.audit(db, "pilot.vendor_late_draft_recorded", "pilot", pilot.id, None, {"draft_reference": reference})
+    return to_dict(row)
+
+
+def complete_vendor_late_drafts(ctx: Ctx, db: Session, pilot_id: uuid.UUID, body: dict[str, Any], if_match: int | None) -> dict[str, Any]:
+    """The vendor confirms the late-draft record is complete (zero rows means none were late)."""
     pilot = lock_or_404(db, Pilot, pilot_id)
     ctx.require(Action.RECORD_VENDOR_DRAFTS, "pilot", pilot.id)
     check_version(pilot, if_match)
-    count = inputs.an_int(body, "vendor_late_draft_count")
-    if count is None:
-        raise Problem(422, "Missing field", "vendor_late_draft_count is required (0 when none were late)")
-    before = {"vendor_late_draft_count": pilot.vendor_late_draft_count}
-    pilot.vendor_late_draft_count = count
+    if body.get("complete") is not True:
+        raise Problem(422, "Confirmation required", "send complete: true")
     pilot.vendor_late_drafts_recorded_at = datetime.now(UTC)
     pilot.vendor_late_drafts_recorded_by = ctx.user_id
     pilot.row_version += 1
     db.flush()
-    ctx.audit(db, "pilot.vendor_late_drafts_set", "pilot", pilot.id, before, {"vendor_late_draft_count": count})
-    return to_dict(pilot)
+    ctx.audit(db, "pilot.vendor_late_drafts_completed", "pilot", pilot.id, None, {"drafts": len(vendor_drafts_view(db, pilot.id))})
+    return {**to_dict(pilot), "vendor_late_drafts": vendor_drafts_view(db, pilot.id)}
+
+
+def vendor_drafts_view(db: Session, pilot_id: uuid.UUID) -> list[dict[str, Any]]:
+    rows = db.execute(select(VendorLateDraft).where(VendorLateDraft.pilot_id == pilot_id).order_by(VendorLateDraft.requested_at)).scalars()
+    return [to_dict(r) for r in rows]
 
 
 _APPROVED = ("approved_full", "approved_partial")
@@ -128,8 +200,8 @@ def _pilot_packets(db: Session, pilot: Pilot, timezone: str) -> tuple[list[Pilot
     ro_ids = list(db.execute(select(RepairOrder.id).where(RepairOrder.location_id == pilot.location_id)).scalars())
     # Drafts the vendor returned later than 1 business day count as qualifying for (b) and join (c)'s denominator.
     out: list[PilotPacket] = [
-        PilotPacket(f"vendor-late-draft-{i + 1}", 0, False, False, vendor_draft_late=True)
-        for i in range(pilot.vendor_late_draft_count or 0)
+        PilotPacket(f"vendor-late-draft:{d.draft_reference}", 0, False, False, vendor_draft_late=True)
+        for d in db.execute(select(VendorLateDraft).where(VendorLateDraft.pilot_id == pilot.id)).scalars()
     ]
     excluded: list[dict[str, str]] = []
     if not ro_ids:
@@ -236,7 +308,10 @@ def pilot_report(db: Session, pilot_id: uuid.UUID) -> dict[str, Any]:
         counts,
         rows,
         packets,
-        counts_supplied_at=pilot.baseline_counts_supplied_at,
+        count_history=[
+            CountEvent(e.field, e.value, e.recorded_at)
+            for e in db.execute(select(PilotCountEvent).where(PilotCountEvent.pilot_id == pilot.id)).scalars()
+        ],
         late_drafts_recorded=pilot.vendor_late_drafts_recorded_at is not None,
     )
     pm1 = pm1_incremental_collected(counts, rows, packets, pilot.min_baseline)
@@ -263,5 +338,8 @@ def pilot_report(db: Session, pilot_id: uuid.UUID) -> dict[str, Any]:
         "pm1_incremental_collected_cents": pm1.value_cents if pm1.computable else "not computable",
         "pm1_missing": list(pm1.missing),
         "pm2_checklist_collected_cents": pm2.value_cents,
+        "count_history": count_history_view(db, pilot.id),
+        "vendor_late_drafts": vendor_drafts_view(db, pilot.id),
+        "vendor_late_drafts_record_complete": pilot.vendor_late_drafts_recorded_at is not None,
         "baseline_rows": [{"ro_label": r.ro_label, "complete": r.complete, "entered_at": r.created_at.isoformat()} for r in rows],
     }

@@ -25,6 +25,7 @@ __all__ = [
     "BaselineRow",
     "BaselineTotal",
     "Condition",
+    "CountEvent",
     "PilotCounts",
     "PilotMetrics",
     "PilotPacket",
@@ -34,6 +35,7 @@ __all__ = [
     "pm1_incremental_collected",
     "pm2_checklist_collected",
     "refund_test",
+    "value_in_force",
 ]
 
 APPROVED_CUTOFF_DAYS = 60
@@ -177,6 +179,19 @@ def float_free(value: Fraction) -> str:
 
 
 @dataclass(frozen=True)
+class CountEvent:
+    field: str
+    value: int | None
+    recorded_at: datetime
+
+
+def value_in_force(history: Sequence[CountEvent], field_name: str, at: datetime) -> int | None:
+    """The last value recorded for ``field_name`` at or before ``at`` (None if none or cleared)."""
+    earlier = [e for e in history if e.field == field_name and e.recorded_at <= at]
+    return max(earlier, key=lambda e: e.recorded_at).value if earlier else None
+
+
+@dataclass(frozen=True)
 class Condition:
     name: str
     met: bool | None  # None: undetermined, an input the condition needs is not recorded (B1-003)
@@ -210,7 +225,7 @@ def refund_test(
     baseline_rows: Sequence[BaselineRow],
     packets: Sequence[PilotPacket],
     *,
-    counts_supplied_at: datetime | None = None,
+    count_history: Sequence[CountEvent] | None = None,
     late_drafts_recorded: bool = False,
 ) -> RefundTest:
     """Decision 5.1 refund test.
@@ -219,7 +234,27 @@ def refund_test(
     and the increment shown is A minus the expected amount shown, so it equals the exact increment
     rounded down; ``incremental < threshold`` then holds exactly when the exact increment is under it.
     A condition whose inputs are not recorded is undetermined, never a definite answer (B1-003).
+
+    ``count_history`` is every recorded change to the baseline counts. Condition (a) and the refund
+    baseline use the values in force at the end of day 7; a count supplied or raised later does not
+    count as supplied by day 7 (B1-003, fix round 2). ``None`` means no history is available.
     """
+    day7_end = pilot_day_end(terms.start_date, 7, terms.timezone)
+    flags: list[str] = []
+    deadline: PilotCounts | None = None
+    if count_history is not None:
+        deadline = PilotCounts(
+            value_in_force(count_history, "baseline_insurer_ro_count", day7_end),
+            value_in_force(count_history, "baseline_supplemented_ro_count", day7_end),
+            counts.window_insurer_ro_count,
+        )
+        if (deadline.baseline_insurer_ro_count, deadline.baseline_supplemented_ro_count) != (
+            counts.baseline_insurer_ro_count,
+            counts.baseline_supplemented_ro_count,
+        ):
+            flags.append("baseline counts changed after day 7; the refund test uses the values in force at the end of day 7")
+        if deadline.baseline_insurer_ro_count is not None and deadline.baseline_supplemented_ro_count is not None:
+            counts = deadline
     qualifying = sorted((p for p in packets if p.qualifying), key=lambda p: p.packet_id)
     pilot_approved = sum(p.insurer_approved_cents_day60 for p in qualifying)
 
@@ -231,7 +266,7 @@ def refund_test(
         missing.append("baseline insurer-paid RO count is 0")
 
     rate = expected = incremental = None
-    flags = list(base.flags)
+    flags += list(base.flags)
     if not missing:
         assert base.total_cents is not None
         r = counts.baseline_insurer_ro_count
@@ -245,18 +280,17 @@ def refund_test(
             flags.append("incremental approved dollars are negative")
 
     # (a) the two baseline counts and >= min complete rows supplied by day 7.
-    day7_end = pilot_day_end(terms.start_date, 7, terms.timezone)
     on_time_complete = [r for r in baseline_rows if r.complete and r.created_at <= day7_end]
     counts_given = counts.baseline_insurer_ro_count is not None and counts.baseline_supplemented_ro_count is not None
     a_met: bool | None
     if not counts_given:
         a_met, a_counts = False, "missing"
-    elif counts_supplied_at is None:
+    elif deadline is None:
         a_met, a_counts = None, "present, but when they were supplied is not recorded"
-    elif counts_supplied_at > day7_end:
-        a_met, a_counts = False, "supplied after day 7"
+    elif deadline.baseline_insurer_ro_count is None or deadline.baseline_supplemented_ro_count is None:
+        a_met, a_counts = False, "not in force at the end of day 7"
     else:
-        a_met, a_counts = True, "supplied by day 7"
+        a_met, a_counts = True, "in force at the end of day 7"
     if len(on_time_complete) < terms.min_baseline:
         a_met = False
     cond_a = Condition("a", a_met, f"{len(on_time_complete)} complete baseline rows entered by day 7; counts {a_counts}")
@@ -281,11 +315,9 @@ def refund_test(
     conditions = (cond_a, cond_b, cond_c)
 
     refund_due: bool | None
-    if missing or incremental is None:
-        refund_due = None
-    elif incremental >= terms.threshold_cents or any(c.met is False for c in conditions):
-        refund_due = False
-    elif any(c.met is None for c in conditions):
+    if any(c.met is False for c in conditions) or (incremental is not None and incremental >= terms.threshold_cents):
+        refund_due = False  # a failed participation condition or an increment at the threshold is definite
+    elif missing or incremental is None or any(c.met is None for c in conditions):
         refund_due = None
     else:
         refund_due = True

@@ -114,7 +114,7 @@ Search here before adding a helper (R-03). Each lives once; `scripts/check_bound
 | Packet renderer interface | `packages/files/src/sp_files/render.py` | Deterministic stand-in only in B1 |
 | Parser interface and registry | `packages/parsers/src/sp_parsers/__init__.py` | No real parser yet (T-3.1.3 blocked) |
 | ORM models, tenant transaction | `packages/db/src/sp_db/models.py`, `session.py` | `tenant_transaction` sets tenant, user, role and correlation ID |
-| Approval reset, immutability, append-only audit | Migrations `20261111_0001`, `20261112_0002` (SQL functions and triggers) | `sp_reset_line` is the one reset function; approver demotion resets approvals |
+| Approval reset, immutability, append-only audit | Migrations `20261111_0001`, `20261111_0002`, `20261111_0003` (SQL functions and triggers) | `sp_reset_line` is the one reset function; approver demotion resets approvals |
 
 | Command | State | What it does |
 |---|---|---|

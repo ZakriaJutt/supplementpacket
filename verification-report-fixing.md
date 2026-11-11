@@ -265,16 +265,16 @@ Author checks are not review findings and do not use `F-` identifiers.
 
 **Risk register.** Rows R-01, R-02, R-03, R-04, R-05, R-07, R-08, R-10, R-12, R-13, R-16, R-17 and R-19 now cite the B1 test that covers them. No other row changed.
 
-### 9.1 Fix round 1 (2026-11-12)
+### 9.1 Fix round 1 (2026-11-11)
 
-Independent code review round 1 (`_coordination/review/supplementpacket-b1-round1.md`): 0 blockers, 6 majors, 5 minors. The lead's rulings were applied. Fixes are by the developer; **none is re-reviewed yet**. Each defect has a permanent regression test. Migration `20261112_0002` adds the fields (expand only).
+Independent code review round 1 (`_coordination/review/supplementpacket-b1-round1.md`): 0 blockers, 6 majors, 5 minors. The lead's rulings (2026-11-11) were applied; they are lead rulings, not owner decisions, and the B1-004 baseline rule is pending owner confirmation. Fixes are by the developer; **none is re-reviewed yet**. Each defect has a permanent regression test. Migration `20261111_0002` adds the fields (expand only).
 
 | Finding | Status | Fix | Regression test |
 |---|---|---|---|
 | B1-001 major | Fixed | The pilot report groups each RO's supersede chain. The chain qualifies when any packet in it was sent in days 1 to 30, and it counts once, under its first in-window packet. Amounts come from the live packet (carried responses, re-pointed payments), limited to lines that were requested in a packet sent in the window | `integration/test_fix_round1.py::test_b1_001_*`: v2 frozen but not sent, and v2 sent on day 41. A stays 20000 and the chain counts once |
 | B1-002 major | Fixed | An approval counts in A only with a response date inside days 1 to 60 and a response document uploaded by day 60. Excluded approvals are listed with a reason. A response date in the future is refused, and `response_recorded_at` is stored | `test_b1_002_*` |
 | B1-003 major | Fixed | Added `pilots.baseline_counts_supplied_at` (set when both baseline counts are first present), `pilots.vendor_late_draft_count` with recorded time and recorder (Operator only, `PATCH /pilots/{id}/vendor-late-drafts`), and `users.display_name`, which the PDF now shows. A condition with missing inputs is `undetermined`, and so is the refund result, unless another input already makes it definitely not due | `unit/test_ledger_pilot.py::test_b1_003_*`; `integration/test_fix_round1.py::test_b1_003_*` (includes the UT-11 late-draft variant through the API, and the approver name in the PDF) |
-| B1-004 major | Fixed; Decision 5.1 and PRD 11 corrected | Baseline = max(complete rows scaled to S, the highest-row valuation). In the second candidate, each incomplete or missing row is valued at the highest complete row, or at its own supplied amount if that is higher. Both candidates are shown in the flags | `unit/test_ledger_pilot.py::test_b1_004_*` (reviewer cases a02 = 110000 and a03 = 420000). UT-11 and its variants unchanged |
+| B1-004 major | Fixed; Decision 5.1 and PRD 11 corrected (lead ruling, pending owner confirmation; it removes the effect of the 80% threshold) | Baseline = max(complete rows scaled to S, the highest-row valuation). In the second candidate, each incomplete or missing row is valued at the highest complete row, or at its own supplied amount if that is higher. Both candidates are shown in the flags | `unit/test_ledger_pilot.py::test_b1_004_*` (reviewer cases a02 = 110000 and a03 = 420000). UT-11 and its variants unchanged |
 | B1-005 major | Fixed; E2E-06 rewritten | A line in the live packet that the new version no longer requests is copied into the new version as `request_state='withdrawn'`, with its amount, outside the requested total, line count and request. The email says how many lines were withdrawn, and the PDF lists them separately. The ledger shows the withdrawn amount. An insurer response on a withdrawn line is refused | `test_e2e06_b1_005_*` |
 | B1-006 major | Fixed | A membership trigger resets every line a user approved when that user's Owner or Estimator role is changed or removed. Freeze also rechecks, under its lock, that each approver is an active Owner or Estimator. If not, it returns 409 and resets those lines in a committed transaction | `test_b1_006_*` (demoted, disabled, removed) |
 | B1-007 minor | Fixed | The rate and the expected amount are rounded up. The increment shown is A minus the expected amount shown, which is the exact increment rounded down. A half cent can no longer deny a refund, and the report is consistent | `unit/test_ledger_pilot.py::test_b1_007_*` |
@@ -298,7 +298,7 @@ Independent code review round 1 (`_coordination/review/supplementpacket-b1-round
   - a07, a08, a12: the script hard-codes September sent dates before the freeze, which B1-010 refuses. a07 and a08 are covered by date-relative regression tests.
   - a11: the 15 kB paste is now refused with 422.
 
-**Final run (2026-11-12, test database dropped and re-migrated first):**
+**Final run (2026-11-11, test database dropped and re-migrated first):**
 
 | Check | Result |
 |---|---|
@@ -306,7 +306,7 @@ Independent code review round 1 (`_coordination/review/supplementpacket-b1-round
 | `make lint` | 0 findings |
 | `make typecheck` (mypy strict) | 0 issues in 48 files |
 | `make boundaries` | 0 violations |
-| `make heads` | 1 head (`20261112_0002`) |
+| `make heads` | 1 head (`20261111_0002`) |
 | `make parity` | 0 differences; 11 integrity triggers present |
 
 **Documents changed in this round:**
@@ -318,3 +318,43 @@ Independent code review round 1 (`_coordination/review/supplementpacket-b1-round
 - TRD 8.1: vendor-late endpoint, freeze recheck.
 - AGENTS section 11.
 - This section.
+
+### 9.2 Independent retest (round 2, 2026-11-11) and fixes after retest
+
+Reviewer verdicts, copied unchanged from `_coordination/review/supplementpacket-b1-verdicts.json` (review note `supplementpacket-b1-round2.md`; reviewer: 77 passed; 21 of 21 adversarial cases pass after moving a07, a08 and a12 to dates relative to today; no new finding at blocker, major or regression level):
+
+| Finding | Reviewer verdict (round 2) |
+|---|---|
+| B1-001 | Closed |
+| B1-002 | Closed |
+| B1-003 | Closed, part open: baseline_counts_supplied_at records only the first time both counts are present; a later change to the counts (S 12 -> 30 after day 7, or S cleared) keeps the early time, so condition (a) reads changed counts as supplied by day 7, and a larger S raises the shop-favour baseline. The vendor-late count is a bare integer only the Operator (vendor) can set, with no per-draft dates the shop can see |
+| B1-004 | Closed |
+| B1-005 | Closed |
+| B1-006 | Closed |
+| B1-007 | Closed |
+| B1-008 | Closed, part open: a bare number with no symbol or currency word ('storage 1500') is not detected; the limit is stated in verification section 9.1 |
+| B1-009 | Closed |
+| B1-010 | Closed |
+| B1-011 | Closed, part open: photo re-encoding and location-metadata removal (MH-05, T-4.2.1) not implemented; stated in section 9.1 |
+
+**Fixed after retest (lead instructions of 2026-11-11; not re-reviewed):**
+
+| Item | Change |
+|---|---|
+| B1-003 part, counts | Every change to a pilot count is an append-only row in `pilot_count_events` (migration `20261111_0003`). Condition (a) and the refund baseline use the values in force at the end of day 7. A count supplied or raised after day 7 does not count as supplied by day 7, and clearing a count after day 7 leaves the day-7 value in force. The report shows the full history and flags a later change. A failed participation condition is now a definite "not due" even when the increment is not computable. Regression tests: `unit/test_ledger_pilot.py::test_b1_003_round2_counts_changed_after_day7_use_deadline_value` and `integration/test_fix_round1.py::test_b1_003_round2_counts_raised_after_day7_api` (the reviewer's S 12 → 30 case, plus clearing S) |
+| B1-003 part, vendor-late drafts | The bare count is removed. Each late draft is an append-only `vendor_late_drafts` row: draft reference, requested and returned times, note, recorder and recorded time. Only the vendor Operator can create one, and only when the return took more than 1 business day. Every shop role can read them (`GET /pilots/{id}/vendor-late-drafts`, and in the report). Condition (b) stays undetermined until the Operator confirms the record is complete. Regression test: `test_b1_003_refund_undetermined_until_inputs_recorded` (rewritten) |
+| B1-004 label | The baseline rule is relabelled in Decision 5.1, PRD 11, execution-plan UT-11 and this section as "lead ruling, pending owner confirmation". The text states that it removes the effect of the 80% threshold. The other rulings, B1-001, B1-002, B1-003 and B1-007, are relabelled from "owner ruling" to "lead ruling" |
+| Dates | Every document date of 2026-11-12 is corrected to 2026-11-11. The fix-round-1 migration is renamed `20261111_0002` (revision ID as well; it was never merged or deployed) |
+
+B1-008 (bare numbers) and B1-011 (photo re-encoding and metadata removal) remain part open, as the reviewer recorded.
+
+**Final run (2026-11-11, test database dropped and re-migrated first):**
+
+| Check | Result |
+|---|---|
+| `make test` | 79 passed, 0 failed (29 unit, 50 integration) |
+| `make lint` | 0 findings, 61 files formatted |
+| `make typecheck` (mypy strict) | 0 issues in 49 files |
+| `make boundaries` | 0 violations |
+| `make heads` | 1 head (`20261111_0003`) |
+| `make parity` | 0 differences; 13 integrity triggers present; row-level security on all 24 tenant tables |

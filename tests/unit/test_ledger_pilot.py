@@ -19,6 +19,7 @@ from sp_core.ledger import (
 )
 from sp_core.pilot import (
     BaselineRow,
+    CountEvent,
     PilotCounts,
     PilotPacket,
     PilotTerms,
@@ -162,11 +163,21 @@ def _rows(complete: list[int], incomplete: int) -> list[BaselineRow]:
 
 COUNTS = PilotCounts(baseline_insurer_ro_count=150, baseline_supplemented_ro_count=30, window_insurer_ro_count=40)
 TERMS = PilotTerms(start_date=START)
-REC = {"counts_supplied_at": ON_TIME, "late_drafts_recorded": True}
+
+
+def hist(counts: PilotCounts, at: datetime = ON_TIME) -> list[CountEvent]:
+    return [
+        CountEvent("baseline_insurer_ro_count", counts.baseline_insurer_ro_count, at),
+        CountEvent("baseline_supplemented_ro_count", counts.baseline_supplemented_ro_count, at),
+    ]
+
+
+def rec(counts: PilotCounts) -> dict[str, object]:
+    return {"count_history": hist(counts), "late_drafts_recorded": True}
 
 
 def test_ut11_refund_test_base_case() -> None:
-    result = refund_test(TERMS, COUNTS, _rows([15000] * 30, 0), _packets(6), **REC)
+    result = refund_test(TERMS, COUNTS, _rows([15000] * 30, 0), _packets(6), **rec(COUNTS))
     assert result.pilot_approved_cents == 180000
     assert result.baseline_rate_cents == 3000
     assert result.expected_cents == 120000
@@ -179,14 +190,14 @@ def test_ut11_refund_test_base_case() -> None:
 
 
 def test_ut11_with_eight_documents_refund_due() -> None:
-    result = refund_test(TERMS, COUNTS, _rows([15000] * 30, 0), _packets(8), **REC)
+    result = refund_test(TERMS, COUNTS, _rows([15000] * 30, 0), _packets(8), **rec(COUNTS))
     assert "89%" in result.conditions[2].detail
     assert all(c.met for c in result.conditions)
     assert result.refund_due is True
 
 
 def test_ut11_variant_80_percent_complete_scales_mean() -> None:
-    result = refund_test(TERMS, COUNTS, _rows([15000] * 24, 6), _packets(6), **REC)
+    result = refund_test(TERMS, COUNTS, _rows([15000] * 24, 6), _packets(6), **rec(COUNTS))
     assert result.baseline_rate_cents == 3000  # 15000 x 30 = 450000 over 150
     assert result.expected_cents == 120000
     assert result.incremental_approved_cents == 60000
@@ -196,7 +207,7 @@ def test_ut11_variant_80_percent_complete_scales_mean() -> None:
 def test_ut11_variant_67_percent_complete_uses_highest_row() -> None:
     complete = [40000] + [13000] * 18 + [26000]  # 20 rows totalling 300000, highest 40000
     assert sum(complete) == 300000 and len(complete) == 20
-    result = refund_test(TERMS, COUNTS, _rows(complete, 10), _packets(6), **REC)
+    result = refund_test(TERMS, COUNTS, _rows(complete, 10), _packets(6), **rec(COUNTS))
     assert result.baseline_rate_cents == 4667  # 700000 / 150
     assert result.expected_cents == 186667
     assert result.incremental_approved_cents is not None and result.incremental_approved_cents < 0
@@ -208,7 +219,7 @@ def test_ut11_variant_67_percent_complete_uses_highest_row() -> None:
 def test_ut11_late_rows_fail_condition_a() -> None:
     late = datetime(2026, 9, 9, tzinfo=UTC)  # after the end of day 7 (2026-09-07 Pacific)
     rows = [BaselineRow(f"B{i:02d}", 15000, 15000, 15000, late) for i in range(30)]
-    result = refund_test(TERMS, COUNTS, rows, _packets(8), **REC)
+    result = refund_test(TERMS, COUNTS, rows, _packets(8), **rec(COUNTS))
     assert not result.conditions[0].met and result.refund_due is False
 
 
@@ -230,7 +241,7 @@ def test_ut12_undated_row_sets_uncensored_flag_and_cutoff_applies() -> None:
     dated = [BaselineRow(f"D{i}", 15000, 15000, 15000, ON_TIME, date(2026, 6, 1), date(2026, 6, 20), date(2026, 7, 1)) for i in range(10)]
     late = BaselineRow("LATE", 15000, 15000, 15000, ON_TIME, date(2026, 6, 1), date(2026, 6, 1) + timedelta(days=61), None)
     undated = BaselineRow("U", 15000, 15000, 15000, ON_TIME)
-    result = refund_test(TERMS, PilotCounts(120, 12, 40), [*dated, late, undated], _packets(8), **REC)
+    result = refund_test(TERMS, PilotCounts(120, 12, 40), [*dated, late, undated], _packets(8), **rec(PilotCounts(120, 12, 40)))
     assert any("uncensored" in f for f in result.flags)
     # 11 of 12 rows count 15000; the late approval is cut at 60 days: 165000 over 120 ROs.
     assert result.baseline_rate_cents == 1375
@@ -241,10 +252,15 @@ def test_b1_003_unrecorded_inputs_make_conditions_undetermined() -> None:
     no_ts = refund_test(TERMS, COUNTS, _rows([15000] * 30, 0), _packets(8), late_drafts_recorded=True)
     assert no_ts.conditions[0].met is None and no_ts.refund_due is None and no_ts.refund_result == "undetermined"
     few = [p for p in _packets(8) if not p.vendor_draft_late][:7]
-    no_late = refund_test(TERMS, COUNTS, _rows([15000] * 30, 0), few, counts_supplied_at=ON_TIME)
+    no_late = refund_test(TERMS, COUNTS, _rows([15000] * 30, 0), few, count_history=hist(COUNTS))
     assert no_late.conditions[1].met is None and no_late.refund_due is None
     late_counts = refund_test(
-        TERMS, COUNTS, _rows([15000] * 30, 0), _packets(8), counts_supplied_at=datetime(2026, 9, 10, tzinfo=UTC), late_drafts_recorded=True
+        TERMS,
+        COUNTS,
+        _rows([15000] * 30, 0),
+        _packets(8),
+        count_history=hist(COUNTS, datetime(2026, 9, 10, tzinfo=UTC)),
+        late_drafts_recorded=True,
     )
     assert late_counts.conditions[0].met is False and late_counts.refund_due is False
     # A definite "not due" from the amount alone stays definite even with an input missing.
@@ -274,7 +290,45 @@ def test_b1_007_half_cent_resolves_in_the_shops_favour() -> None:
     rows = [BaselineRow(f"B{i:02d}", 10000, 1 if i == 0 else 0, 0, ON_TIME) for i in range(10)]
     counts = PilotCounts(baseline_insurer_ro_count=2, baseline_supplemented_ro_count=10, window_insurer_ro_count=1)
     packets = [PilotPacket(f"P{i}", 100000 if i == 0 else 0, True, True) for i in range(9)]
-    t = refund_test(PilotTerms(start_date=START), counts, rows, packets, **REC)
+    t = refund_test(PilotTerms(start_date=START), counts, rows, packets, **rec(counts))
     assert t.expected_cents == 1  # 1/2 cent rounded up
     assert t.incremental_approved_cents == 99999 == t.pilot_approved_cents - t.expected_cents
     assert t.refund_due is True
+
+
+def test_b1_003_round2_counts_changed_after_day7_use_deadline_value() -> None:
+    """Reviewer n4: S supplied as 12 by day 7, raised to 30 after day 7, or cleared after day 7."""
+    rows = [BaselineRow(f"B{i:02d}", 10000, 1000, 1000, ON_TIME) for i in range(10)]
+    late = datetime(2026, 9, 12, tzinfo=UTC)  # after the end of day 7 (2026-09-07 Pacific)
+    early = [CountEvent("baseline_insurer_ro_count", 100, ON_TIME), CountEvent("baseline_supplemented_ro_count", 12, ON_TIME)]
+    packets = [PilotPacket(f"p{i}", 10000, True, True) for i in range(8)]
+    current = PilotCounts(100, 30, 40)
+    raised = refund_test(
+        TERMS,
+        current,
+        rows,
+        packets,
+        count_history=[*early, CountEvent("baseline_supplemented_ro_count", 30, late)],
+        late_drafts_recorded=True,
+    )
+    assert raised.conditions[0].met is True  # S = 12 was in force at day 7
+    assert raised.expected_cents == 4800  # max(12 x 1000, 10 x 1000 + 2 x 1000) = 12000 over 100 x 40; not the raised S = 30
+    assert any("values in force at the end of day 7" in f for f in raised.flags)
+    cleared = refund_test(
+        TERMS,
+        PilotCounts(100, None, 40),
+        rows,
+        packets,
+        count_history=[*early, CountEvent("baseline_supplemented_ro_count", None, late)],
+        late_drafts_recorded=True,
+    )
+    assert cleared.conditions[0].met is True and cleared.expected_cents == 4800
+    only_late = refund_test(
+        TERMS,
+        current,
+        rows,
+        packets,
+        count_history=[CountEvent("baseline_insurer_ro_count", 100, late), CountEvent("baseline_supplemented_ro_count", 30, late)],
+        late_drafts_recorded=True,
+    )
+    assert only_late.conditions[0].met is False and only_late.refund_due is False and only_late.refund_result == "not_due"

@@ -1,8 +1,8 @@
 """Fix round 1: withdrawn packet lines, response recording time, pilot inputs, approver name, approver demotion.
 
-Revision ID: 20261112_0002
+Revision ID: 20261111_0002
 Revises: 20261111_0001
-Create Date: 2026-11-12
+Create Date: 2026-11-11
 
 B1-001/B1-002 (response_recorded_at), B1-003 (pilot counts timestamp, vendor-late drafts,
 users.display_name), B1-005 (packet_lines.request_state), B1-006 (membership demotion
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "20261112_0002"
+revision = "20261111_0002"
 down_revision = "20261111_0001"
 branch_labels = None
 depends_on = None

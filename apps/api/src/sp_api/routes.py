@@ -20,7 +20,7 @@ from sp_api.services import documents as docs
 from sp_api.services import ledger, lines, packets, pilot
 from sp_api.services.common import get_or_404, parse_uuid, to_dict
 from sp_core.permissions import Action
-from sp_db.models import ChecklistItem, Document, EstimateLine, Job, Packet, RepairOrder, SupplementLine
+from sp_db.models import ChecklistItem, Document, EstimateLine, Job, Packet, Pilot, RepairOrder, SupplementLine
 from sp_files import sha256_hex, sign_download_url, verify_download_signature
 
 router = APIRouter()
@@ -483,8 +483,23 @@ def set_counts(
     return _mutate(ctx, request, key, body, lambda db: pilot.set_counts(ctx, db, pid, body, _if_match(if_match)))
 
 
+@router.get("/pilots/{pilot_id}/vendor-late-drafts")
+def list_vendor_late_drafts(pilot_id: str, ctx: Ctx = Depends(get_ctx)) -> list[dict[str, Any]]:
+    with ctx.tx() as db:
+        found = get_or_404(db, Pilot, parse_uuid(pilot_id))
+        return pilot.vendor_drafts_view(db, found.id)
+
+
+@router.post("/pilots/{pilot_id}/vendor-late-drafts")
+def add_vendor_late_draft(
+    pilot_id: str, request: Request, body: JsonBody = Body(...), ctx: Ctx = Depends(get_ctx), key: str | None = IdemKey
+) -> JSONResponse:
+    pid = parse_uuid(pilot_id)
+    return _mutate(ctx, request, key, body, lambda db: pilot.add_vendor_late_draft(ctx, db, pid, body), 201)
+
+
 @router.patch("/pilots/{pilot_id}/vendor-late-drafts")
-def set_vendor_late_drafts(
+def complete_vendor_late_drafts(
     pilot_id: str,
     request: Request,
     body: JsonBody = Body(...),
@@ -493,7 +508,7 @@ def set_vendor_late_drafts(
     if_match: str | None = IfMatch,
 ) -> JSONResponse:
     pid = parse_uuid(pilot_id)
-    return _mutate(ctx, request, key, body, lambda db: pilot.set_vendor_late_drafts(ctx, db, pid, body, _if_match(if_match)))
+    return _mutate(ctx, request, key, body, lambda db: pilot.complete_vendor_late_drafts(ctx, db, pid, body, _if_match(if_match)))
 
 
 @router.get("/pilots/{pilot_id}/report")

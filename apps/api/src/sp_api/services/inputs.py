@@ -9,7 +9,7 @@ paste procedure or estimating-guide text.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -21,6 +21,7 @@ __all__ = [
     "FREE_TEXT_NOTICE",
     "LIMITS",
     "a_date",
+    "a_datetime",
     "a_uuid",
     "an_int",
     "cents",
@@ -113,6 +114,21 @@ def a_date(body: dict[str, Any], key: str, *, required: bool = True) -> date | N
         return date.fromisoformat(str(value))
     except ValueError as exc:
         raise Problem(422, "Invalid date", f"{key} must be YYYY-MM-DD", field=key) from exc
+
+
+def a_datetime(body: dict[str, Any], key: str, *, required: bool = True) -> datetime | None:
+    value = body.get(key)
+    if value in (None, ""):
+        if required:
+            raise Problem(422, "Missing field", f"{key} is required", field=key)
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError as exc:
+        raise Problem(422, "Invalid time", f"{key} must be an ISO 8601 time with offset", field=key) from exc
+    if parsed.tzinfo is None:
+        raise Problem(422, "Invalid time", f"{key} needs a time zone offset", field=key)
+    return parsed
 
 
 def an_int(body: dict[str, Any], key: str, *, minimum: int = 0) -> int | None:

@@ -661,7 +661,6 @@ class Pilot(Base):
     window_insurer_ro_count: Mapped[int | None] = mapped_column(Integer)
     counts_source_note: Mapped[str | None] = mapped_column(Text)
     baseline_counts_supplied_at: Mapped[datetime | None] = mapped_column(TS)
-    vendor_late_draft_count: Mapped[int | None] = mapped_column(Integer)
     vendor_late_drafts_recorded_at: Mapped[datetime | None] = mapped_column(TS)
     vendor_late_drafts_recorded_by: Mapped[uuid.UUID | None] = _user_fk()
     created_by: Mapped[uuid.UUID] = _user_fk(nullable=False)
@@ -672,9 +671,53 @@ class Pilot(Base):
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     __table_args__ = (
         CheckConstraint("refund_state IN ('not_due','due','paid')", name="ck_pilots_refund"),
-        CheckConstraint("vendor_late_draft_count IS NULL OR vendor_late_draft_count >= 0", name="ck_pilots_late_drafts"),
+        UniqueConstraint("tenant_id", "id", name="uq_pilots_tenant_id"),
         UniqueConstraint("tenant_id", "location_id", "start_date", name="uq_pilots_start"),
         ForeignKeyConstraint(["tenant_id", "location_id"], ["locations.tenant_id", "locations.id"], name="fk_pilots_location"),
+    )
+
+
+class PilotCountEvent(Base):
+    """Append-only history of every change to a pilot count (B1-003 fix round 2)."""
+
+    __tablename__ = "pilot_count_events"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = _tenant()
+    pilot_id: Mapped[uuid.UUID] = mapped_column(UUIDT, nullable=False)
+    field: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[int | None] = mapped_column(Integer)
+    recorded_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    recorded_by: Mapped[uuid.UUID] = _user_fk(nullable=False)
+    __table_args__ = (
+        CheckConstraint(
+            "field IN ('baseline_insurer_ro_count','baseline_supplemented_ro_count','window_insurer_ro_count')",
+            name="ck_pilot_count_events_field",
+        ),
+        CheckConstraint("value IS NULL OR value >= 0", name="ck_pilot_count_events_value"),
+        ForeignKeyConstraint(["tenant_id", "pilot_id"], ["pilots.tenant_id", "pilots.id"], name="fk_pilot_count_events_pilot"),
+        Index("ix_pilot_count_events_pilot", "tenant_id", "pilot_id", "field", "recorded_at"),
+    )
+
+
+class VendorLateDraft(Base):
+    """A draft the vendor returned later than 1 business day; auditable and visible to the shop."""
+
+    __tablename__ = "vendor_late_drafts"
+    id: Mapped[uuid.UUID] = _pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant()
+    pilot_id: Mapped[uuid.UUID] = mapped_column(UUIDT, nullable=False)
+    draft_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    returned_at: Mapped[datetime | None] = mapped_column(TS)
+    note: Mapped[str | None] = mapped_column(Text)
+    recorded_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    recorded_by: Mapped[uuid.UUID] = _user_fk(nullable=False)
+    __table_args__ = (
+        CheckConstraint("length(draft_reference) BETWEEN 1 AND 100", name="ck_vendor_late_drafts_ref"),
+        CheckConstraint("note IS NULL OR length(note) <= 300", name="ck_vendor_late_drafts_note"),
+        CheckConstraint("returned_at IS NULL OR returned_at >= requested_at", name="ck_vendor_late_drafts_order"),
+        UniqueConstraint("tenant_id", "pilot_id", "draft_reference", name="uq_vendor_late_drafts_ref"),
+        ForeignKeyConstraint(["tenant_id", "pilot_id"], ["pilots.tenant_id", "pilots.id"], name="fk_vendor_late_drafts_pilot"),
     )
 
 

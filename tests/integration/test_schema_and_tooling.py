@@ -42,11 +42,11 @@ def test_it07_second_migration_head_fails(tmp_path: Path) -> None:
     shutil.copytree(versions, copy, ignore=shutil.ignore_patterns("__pycache__"))
     current = heads.heads(str(copy))
     assert len(current) == 1
-    (copy / "versions" / "20261112_0002_branch_a.py").write_text(
+    (copy / "versions" / "20261111_0092_branch_a.py").write_text(
         'revision = "branch_a"\ndown_revision = "' + current[0] + '"\nbranch_labels = None\ndepends_on = None\n'
         "def upgrade():\n    pass\ndef downgrade():\n    pass\n"
     )
-    (copy / "versions" / "20261112_0003_branch_b.py").write_text(
+    (copy / "versions" / "20261111_0093_branch_b.py").write_text(
         'revision = "branch_b"\ndown_revision = "' + current[0] + '"\nbranch_labels = None\ndepends_on = None\n'
         "def upgrade():\n    pass\ndef downgrade():\n    pass\n"
     )

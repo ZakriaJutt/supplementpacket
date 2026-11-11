@@ -177,17 +177,28 @@ def test_b1_003_refund_undetermined_until_inputs_recorded(api: dict[str, Api], s
     assert report["conditions"][0]["met"] is True
     assert report["conditions"][1]["met"] == "undetermined"  # vendor-late drafts not recorded, fewer than 8 packets
     assert report["refund_result"] in ("undetermined", "not_due")
+    draft = {"draft_reference": "HAND-RUN-07", "requested_at": "2026-11-02T09:00:00-08:00", "returned_at": "2026-11-05T16:00:00-08:00"}
+    assert office.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json=draft).status_code == 403
     assert (
-        office.patch(
-            f"/pilots/{shop.pilot_id}/vendor-late-drafts", json={"vendor_late_draft_count": 1}, headers={"If-Match": "2"}
+        op.post(
+            f"/pilots/{shop.pilot_id}/vendor-late-drafts",
+            json={**draft, "draft_reference": "ON-TIME", "returned_at": "2026-11-02T15:00:00-08:00"},
         ).status_code
-        == 403
+        == 422
     )
-    r = op.patch(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json={"vendor_late_draft_count": 1}, headers={"If-Match": "2"})
+    r = op.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json=draft)
+    assert r.status_code == 201, r.text
+    assert r.json()["recorded_by"] == str(shop.users["operator"]) and r.json()["recorded_at"]
+    # Still undetermined until the vendor confirms the record is complete.
+    assert _report(owner, shop)["conditions"][1]["met"] == "undetermined"
+    pilot_row = owner.get(f"/pilots/{shop.pilot_id}/report").json()
+    assert pilot_row["vendor_late_drafts"][0]["draft_reference"] == "HAND-RUN-07"  # the shop can see it
+    assert [d["draft_reference"] for d in owner.get(f"/pilots/{shop.pilot_id}/vendor-late-drafts").json()] == ["HAND-RUN-07"]
+    r = op.patch(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json={"complete": True}, headers={"If-Match": "2"})
     assert r.status_code == 200, r.text
     report = _report(owner, shop)
     assert report["conditions"][1]["met"] is False
-    assert any(pid.startswith("vendor-late-draft") for pid in report["counted_packet_ids"])  # UT-11 late-draft variant via the API
+    assert "vendor-late-draft:HAND-RUN-07" in report["counted_packet_ids"]  # UT-11 late-draft variant via the API
     assert report["refund_result"] == "not_due"
 
 
@@ -343,3 +354,47 @@ def test_it03_concurrent_uploads_return_one_document(settings: Any, store: Memor
         assert len({d for _, d in out}) == 1
         with owner_engine.connect() as conn:
             assert conn.execute(text("SELECT count(*) FROM documents WHERE ro_id = :r"), {"r": ro}).scalar() == 1
+
+
+def test_b1_003_round2_counts_raised_after_day7_api(api: dict[str, Api], shop: Shop, owner_engine: Any) -> None:
+    """Reviewer n4 through the API: S = 12 supplied by day 7, raised to 30 after day 7."""
+    owner, office = api["owner"], api["office"]
+    for i in range(10):
+        office.post(
+            "/baseline-ros",
+            json={
+                "location_id": str(shop.location_id),
+                "ro_label": f"B{i}",
+                "closed_month": "2026-07-01",
+                "requested_cents": 2000,
+                "approved_cents": 1000,
+                "collected_cents": 1000,
+                "source_note": "synthetic",
+            },
+        )
+    r = office.patch(
+        f"/pilots/{shop.pilot_id}/counts",
+        json={"baseline_insurer_ro_count": 100, "baseline_supplemented_ro_count": 12, "window_insurer_ro_count": 40},
+        headers={"If-Match": "1"},
+    )
+    assert r.status_code == 200
+    # Move the pilot start back 8 days and the first supply into day 3, so the next change lands after day 7.
+    _backdate(owner_engine, "UPDATE pilots SET start_date = :d WHERE id = :p", {"d": TODAY - timedelta(days=8), "p": str(shop.pilot_id)})
+    _backdate(
+        owner_engine,
+        "UPDATE pilot_count_events SET recorded_at = :t WHERE pilot_id = :p",
+        {"t": f"{TODAY - timedelta(days=6)} 12:00-08:00", "p": str(shop.pilot_id)},
+    )
+    _backdate(
+        owner_engine,
+        "UPDATE baseline_ros SET created_at = :t WHERE tenant_id = :x",
+        {"t": f"{TODAY - timedelta(days=6)} 12:00-08:00", "x": str(shop.tenant_id)},
+    )
+    r = office.patch(f"/pilots/{shop.pilot_id}/counts", json={"baseline_supplemented_ro_count": 30}, headers={"If-Match": "2"})
+    assert r.status_code == 200 and [e["value"] for e in r.json()["count_history"]] == [100, 12, 40, 30]
+    report = _report(owner, shop)
+    assert report["conditions"][0]["met"] is True
+    assert report["expected_cents"] == 4800  # S = 12 in force at day 7: 12000 / 100 x 40, not S = 30
+    assert any("values in force at the end of day 7" in f for f in report["flags"])
+    r = office.patch(f"/pilots/{shop.pilot_id}/counts", json={"baseline_supplemented_ro_count": None}, headers={"If-Match": "3"})
+    assert _report(owner, shop)["expected_cents"] == 4800  # clearing after day 7 does not change the day-7 value
