@@ -7,30 +7,34 @@ There is deliberately no function here, or anywhere, that transmits to an insure
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from sp_api.context import Ctx, Problem
-from sp_api.services.common import get_or_404, lock_or_404, to_dict
+from sp_api.context import Ctx, Problem, StaleApprovals
+from sp_api.services import inputs
+from sp_api.services.common import get_or_404, lock_or_404, tenant_now_and_today, to_dict
 from sp_api.services.documents import current_run, enqueue_job
 from sp_api.services.lines import line_snapshots
 from sp_core.approval import LineSnapshot, changed_components, freeze_blockers, review_components, review_fingerprint
 from sp_core.email_draft import build_email_draft
+from sp_core.evidence import FREE_TEXT_NOTICE
 from sp_core.permissions import Action
 from sp_core.reconcile import parse_feeds_packet
 from sp_db.models import (
     DiffRun,
     Insurer,
     LineEvidence,
+    Membership,
     Packet,
     PacketLine,
     Photo,
     ReferenceCitation,
     RepairOrder,
     SupplementLine,
+    User,
 )
 
 __all__ = ["freeze_packet", "mark_sent", "packet_review", "packet_view", "takedown", "unmark_sent"]
@@ -50,20 +54,38 @@ def _recipient(db: Session, ro: RepairOrder) -> dict[str, str | None]:
     }
 
 
-def _review_state(db: Session, ro: RepairOrder, snaps: list[LineSnapshot]) -> dict[str, Any]:
+def _live_packet(db: Session, ro_id: uuid.UUID, *, lock: bool) -> Packet | None:
+    query = select(Packet).where(Packet.ro_id == ro_id, Packet.status.in_(("frozen", "sent")))
+    if lock:
+        query = query.with_for_update()
+    return db.execute(query).scalar_one_or_none()
+
+
+def _withdrawn(db: Session, live: Packet | None, approved_ids: set[str]) -> list[PacketLine]:
+    """Lines of the live packet that the next version no longer requests (B1-005)."""
+    if live is None:
+        return []
+    rows = db.execute(select(PacketLine).where(PacketLine.packet_id == live.id).order_by(PacketLine.line_no)).scalars()
+    return [pl for pl in rows if str(pl.supplement_line_id) not in approved_ids]
+
+
+def _review_state(db: Session, ro: RepairOrder, snaps: list[LineSnapshot], live: Packet | None) -> dict[str, Any]:
     approved = [s for s in snaps if s.status == "approved"]
     total = sum(s.requested_cents for s in approved)
+    withdrawn = _withdrawn(db, live, {s.line_id for s in approved})
     draft = build_email_draft(
         ro_number=ro.ro_number,
         claim_number=ro.claim_number,
         line_count=len(approved),
         requested_total_cents=total,
         free_paragraph=ro.email_free_paragraph,
+        withdrawn_count=len(withdrawn),
     )
     recipient = _recipient(db, ro)
     components = review_components(snaps, email_draft=draft.text, recipient=recipient)
     return {
         "approved": approved,
+        "withdrawn": withdrawn,
         "requested_total_cents": total,
         "email_draft": draft,
         "recipient": recipient,
@@ -77,7 +99,7 @@ def packet_review(ctx: Ctx, db: Session, ro_id: uuid.UUID) -> dict[str, Any]:
     ro = get_or_404(db, RepairOrder, ro_id)
     pairs = line_snapshots(db, ro.id, lock=False)
     snaps = [s for _, s in pairs]
-    state = _review_state(db, ro, snaps)
+    state = _review_state(db, ro, snaps, _live_packet(db, ro.id, lock=False))
     blockers = freeze_blockers(snaps)
     return {
         "ro_id": str(ro.id),
@@ -98,6 +120,11 @@ def packet_review(ctx: Ctx, db: Session, ro_id: uuid.UUID) -> dict[str, Any]:
             for s in snaps
         ],
         "requested_total_cents": state["requested_total_cents"],
+        "withdrawn_lines": [
+            {"supplement_line_id": str(pl.supplement_line_id), "description": pl.description, "requested_cents": pl.requested_cents}
+            for pl in state["withdrawn"]
+        ],
+        "free_text_notice": FREE_TEXT_NOTICE,
         "email_draft": state["email_draft"].text,
         "email_draft_problems": list(state["email_draft"].problems),
         "recipient": state["recipient"],
@@ -159,7 +186,11 @@ def freeze_packet(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any])
 
     problems = [{"item": p.item, "reason": p.reason} for p in freeze_blockers(snaps)]
     problems += _parse_problems(db, lines)
-    state = _review_state(db, ro, snaps)
+    stale = _stale_approvals(db, [line for line in lines if line.status == "approved"])
+    if stale:
+        raise StaleApprovals(stale)
+    live = _live_packet(db, ro.id, lock=True)
+    state = _review_state(db, ro, snaps, live)
     changes = changed_components(shown_components, state["components"])
     if problems or changes:
         raise Problem(
@@ -174,17 +205,14 @@ def freeze_packet(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any])
         raise Problem(422, "Email draft refused", "; ".join(draft.problems), problems=list(draft.problems))
 
     approved = [line for line in lines if line.status == "approved"]
-    live = db.execute(
-        select(Packet).where(Packet.ro_id == ro.id, Packet.status.in_(("frozen", "sent"))).with_for_update()
-    ).scalar_one_or_none()
     previous_lines: dict[uuid.UUID, PacketLine] = {}
     if live is not None:
         previous_lines = {
             pl.supplement_line_id: pl for pl in db.execute(select(PacketLine).where(PacketLine.packet_id == live.id)).scalars()
         }
-        same = {(pl.supplement_line_id, bytes(pl.approved_fingerprint)) for pl in previous_lines.values()} == {
-            (line.id, bytes(line.approved_fingerprint or b"")) for line in approved
-        }
+        same = {
+            (pl.supplement_line_id, bytes(pl.approved_fingerprint)) for pl in previous_lines.values() if pl.request_state == "requested"
+        } == {(line.id, bytes(line.approved_fingerprint or b"")) for line in approved}
         if same and live.email_draft == draft.text:
             raise Problem(409, "Nothing changed", "no approved line changed since the last packet")
 
@@ -209,7 +237,11 @@ def freeze_packet(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any])
     carried = 0
     for number, line in enumerate(approved, start=1):
         prior = previous_lines.get(line.id)
-        unchanged = prior is not None and bytes(prior.approved_fingerprint) == bytes(line.approved_fingerprint or b"")
+        unchanged = (
+            prior is not None
+            and prior.request_state == "requested"
+            and bytes(prior.approved_fingerprint) == bytes(line.approved_fingerprint or b"")
+        )
         pl = PacketLine(
             tenant_id=ctx.tenant_id,
             packet_id=packet.id,
@@ -236,6 +268,31 @@ def freeze_packet(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any])
             pl.response_recorded_by = prior.response_recorded_by
             carried += 1
         db.add(pl)
+    withdrawn_rows = state["withdrawn"]
+    for number, prior in enumerate(withdrawn_rows, start=len(approved) + 1):
+        # Withdrawn through this superseding version: kept with its amount, outside the request (B1-005).
+        db.add(
+            PacketLine(
+                tenant_id=ctx.tenant_id,
+                packet_id=packet.id,
+                supplement_line_id=prior.supplement_line_id,
+                line_no=number,
+                origin=prior.origin,
+                category=prior.category,
+                description=prior.description,
+                requested_cents=prior.requested_cents,
+                evidence_snapshot=prior.evidence_snapshot,
+                approved_by=prior.approved_by,
+                approved_at=prior.approved_at,
+                approved_fingerprint=prior.approved_fingerprint,
+                carried_from_packet_line_id=prior.id,
+                request_state="withdrawn",
+                response_status="withdrawn",
+                approved_cents=0,
+                response_recorded_by=ctx.user_id,
+                response_recorded_at=datetime.now(UTC),
+            )
+        )
     db.flush()
     if live is not None:
         # Payments follow the successor packet; the trigger checks and audits each one.
@@ -246,11 +303,32 @@ def freeze_packet(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any])
         "packet",
         packet.id,
         None,
-        {"version": version, "line_count": len(approved), "supersedes": str(live.id) if live else None, "carried": carried},
+        {
+            "version": version,
+            "line_count": len(approved),
+            "supersedes": str(live.id) if live else None,
+            "carried": carried,
+            "withdrawn": len(withdrawn_rows),
+        },
     )
     job = enqueue_job(ctx, db, "render_packet", packet.id, f"render:{packet.id}")
     db.refresh(packet)
     return {**packet_view(db, packet), "render_job_id": str(job.id)}
+
+
+def _stale_approvals(db: Session, approved: list[SupplementLine]) -> list[uuid.UUID]:
+    """Approved lines whose approver no longer holds Owner or Estimator, or is not active (B1-006)."""
+    approvers = {line.approved_by for line in approved if line.approved_by}
+    if not approvers:
+        return []
+    permitted = set(
+        db.execute(
+            select(Membership.user_id)
+            .join(User, User.id == Membership.user_id)
+            .where(Membership.user_id.in_(approvers), Membership.role.in_(("owner", "estimator")), User.status == "active")
+        ).scalars()
+    )
+    return sorted((line.id for line in approved if line.approved_by not in permitted), key=str)
 
 
 def packet_view(db: Session, packet: Packet) -> dict[str, Any]:
@@ -271,10 +349,18 @@ def mark_sent(ctx: Ctx, db: Session, packet_id: uuid.UUID, body: dict[str, Any])
         raise Problem(422, "Channel required")
     if body.get("confirm") is not True:
         raise Problem(422, "Confirmation required")
-    if body.get("requested_total_cents") != packet.requested_total_cents or body.get("line_count") != packet.line_count:
+    shown_total = inputs.cents(body, "requested_total_cents")
+    if shown_total != packet.requested_total_cents or body.get("line_count") != packet.line_count:
         raise Problem(409, "Confirm the packet total and line count shown", "they do not match this packet")
+    sent_on = inputs.a_date(body, "sent_on")
+    assert sent_on is not None
+    now, today = tenant_now_and_today(db)
+    if sent_on > today:
+        raise Problem(422, "Sent date in the future", "a sent date in the future is refused")
+    if sent_on < packet.frozen_at.astimezone(now.tzinfo).date():
+        raise Problem(422, "Sent date before the freeze", "a packet cannot have been sent before it was frozen")
     packet.status = "sent"
-    packet.sent_on = date.fromisoformat(str(body["sent_on"]))
+    packet.sent_on = sent_on
     packet.sent_channel = channel
     packet.sent_marked_by = ctx.user_id
     packet.sent_marked_at = datetime.now(UTC)
@@ -287,7 +373,7 @@ def mark_sent(ctx: Ctx, db: Session, packet_id: uuid.UUID, body: dict[str, Any])
 def unmark_sent(ctx: Ctx, db: Session, packet_id: uuid.UUID, body: dict[str, Any]) -> dict[str, Any]:
     packet = lock_or_404(db, Packet, packet_id)
     ctx.require(Action.UNMARK_SENT, "packet", packet.id)
-    reason = str(body.get("reason") or "").strip()
+    reason = (inputs.text_field(body, "reason") or "").strip()
     if packet.status != "sent" or packet.sent_marked_at is None:
         raise Problem(409, "Not marked sent")
     if datetime.now(UTC) - packet.sent_marked_at > UNMARK_WINDOW:
@@ -310,7 +396,7 @@ def takedown(ctx: Ctx, db: Session, packet_id: uuid.UUID, body: dict[str, Any]) 
     """Licensed-content takedown: the only change ever made to a frozen packet (IT-19)."""
     packet = lock_or_404(db, Packet, packet_id)
     ctx.require(Action.TAKEDOWN, "packet", packet.id)
-    reason = str(body.get("reason") or "").strip()
+    reason = (inputs.text_field(body, "reason") or "").strip()
     if not reason:
         raise Problem(422, "Reason required")
     if packet.purged_at is not None:

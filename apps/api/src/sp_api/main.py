@@ -15,7 +15,7 @@ from psycopg import errors as pg_errors
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from sp_api.context import AppState, PermissionDenied, Problem
+from sp_api.context import AppState, PermissionDenied, Problem, StaleApprovals
 from sp_api.routes import router
 from sp_core.settings import Settings, get_settings
 from sp_db.session import get_engine
@@ -82,6 +82,10 @@ def create_app(settings: Settings | None = None, store: ObjectStore | None = Non
 
     @app.exception_handler(Problem)
     async def problem_handler(request: Request, exc: Problem) -> JSONResponse:
+        if isinstance(exc, StaleApprovals):
+            ctx = getattr(request.state, "ctx", None)
+            if ctx is not None:
+                ctx.reset_lines(exc.line_ids, "approver no longer holds the estimator role")
         if isinstance(exc, PermissionDenied):
             ctx = getattr(request.state, "ctx", None)
             if ctx is not None:

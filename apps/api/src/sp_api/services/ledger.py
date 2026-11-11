@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from sp_api.context import Ctx, Problem
-from sp_api.services.common import check_version, get_or_404, lock_or_404, to_dict
+from sp_api.services import inputs
+from sp_api.services.common import check_version, get_or_404, lock_or_404, tenant_now_and_today, to_dict
 from sp_core.ledger import (
     SUPPLEMENT_PAYMENT_KINDS,
     LedgerPacket,
@@ -50,29 +50,39 @@ def record_response(ctx: Ctx, db: Session, packet_line_id: uuid.UUID, body: dict
     packet = get_or_404(db, Packet, pl.packet_id)
     if packet.status == "superseded":
         raise Problem(409, "Superseded packet", "record the response on the packet that superseded this one")
+    if pl.request_state == "withdrawn":
+        raise Problem(409, "Withdrawn line", "this line was withdrawn by the superseding packet and has no insurer response")
+    denial = inputs.text_field(body, "denial_reason")
+    override = inputs.text_field(body, "override_reason")
+    approved_in = inputs.cents(body, "approved_cents", required=False)
+    now, today = tenant_now_and_today(db)
+    response_date = inputs.a_date(body, "response_date", required=False)
+    if response_date is not None and response_date > today:
+        raise Problem(422, "Response date in the future", "the insurer's response date cannot be after today")
     try:
         approved = validate_response(
             requested_cents=pl.requested_cents,
             response_status=str(body.get("response_status")),
-            approved_cents=body.get("approved_cents"),
-            denial_reason=body.get("denial_reason"),
-            override_reason=body.get("override_reason"),
+            approved_cents=approved_in,
+            denial_reason=denial,
+            override_reason=override,
         )
     except ResponseError as exc:
         raise Problem(422, "Response refused", str(exc)) from exc
-    doc_id = body.get("response_document_id")
+    doc_id = inputs.a_uuid(body, "response_document_id", required=False)
     if doc_id:
-        doc = get_or_404(db, Document, uuid.UUID(str(doc_id)))
+        doc = get_or_404(db, Document, doc_id)
         if doc.purpose != "response" or doc.packet_id not in packet_chain(db, packet):
             raise Problem(422, "Not a response document for this packet")
     before = {"response_status": pl.response_status, "approved_cents": pl.approved_cents}
     pl.response_status = str(body["response_status"])
     pl.approved_cents = approved
-    pl.denial_reason = body.get("denial_reason")
-    pl.override_reason = body.get("override_reason")
-    pl.response_date = date.fromisoformat(str(body["response_date"])) if body.get("response_date") else None
-    pl.response_document_id = uuid.UUID(str(doc_id)) if doc_id else None
+    pl.denial_reason = denial
+    pl.override_reason = override
+    pl.response_date = response_date
+    pl.response_document_id = doc_id
     pl.response_recorded_by = ctx.user_id
+    pl.response_recorded_at = now
     pl.row_version += 1
     db.flush()
     ctx.audit(db, "response.recorded", "packet_line", pl.id, before, {"response_status": pl.response_status, "approved_cents": approved})
@@ -99,7 +109,7 @@ def record_payment(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any]
     kind = body.get("kind")
     if kind not in PAYMENT_KINDS:
         raise Problem(422, "Invalid payment kind")
-    packet_id = uuid.UUID(str(body["packet_id"])) if body.get("packet_id") else None
+    packet_id = inputs.a_uuid(body, "packet_id", required=False)
     approved_total = paid_total = 0
     if packet_id is not None:
         packet = get_or_404(db, Packet, packet_id)
@@ -108,12 +118,17 @@ def record_payment(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any]
         if packet.status == "superseded":
             raise Problem(409, "Superseded packet", "name the packet that superseded this one")
         approved_total, paid_total = _packet_totals(db, packet.id)
-    remittance_id = uuid.UUID(str(body["remittance_document_id"])) if body.get("remittance_document_id") else None
+    remittance_id = inputs.a_uuid(body, "remittance_document_id", required=False)
     if remittance_id is not None:
         doc = get_or_404(db, Document, remittance_id)
         if doc.purpose != "remittance" or doc.ro_id != ro.id:
             raise Problem(422, "Not a remittance document for this RO")
-    amount = int(body["amount_cents"])
+    amount = inputs.cents(body, "amount_cents")
+    assert amount is not None
+    over_reason = inputs.text_field(body, "over_approved_reason")
+    payer = body.get("payer", "insurer")
+    if payer not in ("insurer", "customer", "other"):
+        raise Problem(422, "Invalid payer")
     try:
         validate_supplement_payment(
             kind=str(kind),
@@ -122,12 +137,15 @@ def record_payment(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any]
             reverses_payment_id=None,
             packet_insurer_approved_cents=approved_total,
             packet_supplement_paid_cents=paid_total,
-            over_approved_reason=body.get("over_approved_reason"),
+            over_approved_reason=over_reason,
         )
     except PaymentError as exc:
         raise Problem(422, "Payment refused", str(exc)) from exc
-    paid_on = date.fromisoformat(str(body["paid_on"]))
-    reference = body.get("reference") or None
+    paid_on = inputs.a_date(body, "paid_on")
+    assert paid_on is not None
+    if paid_on > tenant_now_and_today(db)[1]:
+        raise Problem(422, "Payment date in the future")
+    reference = inputs.text_field(body, "reference")
     duplicate = db.execute(
         select(Payment.id).where(
             Payment.ro_id == ro.id,
@@ -144,8 +162,8 @@ def record_payment(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any]
         packet_id=packet_id,
         kind=kind,
         remittance_document_id=remittance_id,
-        over_approved_reason=body.get("over_approved_reason"),
-        payer=body.get("payer", "insurer"),
+        over_approved_reason=over_reason,
+        payer=payer,
         amount_cents=amount,
         paid_on=paid_on,
         reference=reference,
@@ -165,9 +183,9 @@ def reverse_payment(ctx: Ctx, db: Session, payment_id: uuid.UUID, body: dict[str
         raise Problem(409, "A reversal cannot be reversed")
     if db.execute(select(Payment.id).where(Payment.reverses_payment_id == original.id)).first():
         raise Problem(409, "Already reversed")
-    if not str(body.get("reason") or "").strip():
+    if not (inputs.text_field(body, "reason") or "").strip():
         raise Problem(422, "Reason required")
-    amount = int(body.get("amount_cents") or original.amount_cents)  # full or partial reversal
+    amount = inputs.cents(body, "amount_cents", required=False) or original.amount_cents  # full or partial reversal
     if amount <= 0 or amount > original.amount_cents:
         raise Problem(422, "Reversal amount must be above 0 and at most the original amount")
     reversal = Payment(
@@ -178,7 +196,7 @@ def reverse_payment(ctx: Ctx, db: Session, payment_id: uuid.UUID, body: dict[str
         remittance_document_id=original.remittance_document_id,
         payer=original.payer,
         amount_cents=-amount,
-        paid_on=date.fromisoformat(str(body.get("paid_on") or original.paid_on.isoformat())),
+        paid_on=inputs.a_date(body, "paid_on", required=False) or original.paid_on,
         reference=original.reference,
         reverses_payment_id=original.id,
         recorded_by=ctx.user_id,

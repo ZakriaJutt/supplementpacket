@@ -61,3 +61,14 @@ def _plain(value: Any) -> Any:
 def to_dict(obj: Base, exclude: tuple[str, ...] = ()) -> dict[str, Any]:
     mapper = inspect(obj).mapper
     return {c.key: _plain(getattr(obj, c.key)) for c in mapper.column_attrs if c.key not in exclude}
+
+
+def tenant_now_and_today(db: Session) -> tuple[datetime, date]:
+    """Current instant and the calendar date in the tenant's time zone (row-level security scopes it)."""
+    from zoneinfo import ZoneInfo
+
+    from sp_db.models import Tenant
+
+    tenant = db.execute(select(Tenant)).scalar_one()
+    now = datetime.now(ZoneInfo(tenant.timezone))
+    return now, now.date()

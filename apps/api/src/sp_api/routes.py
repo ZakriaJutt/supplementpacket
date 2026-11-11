@@ -483,6 +483,19 @@ def set_counts(
     return _mutate(ctx, request, key, body, lambda db: pilot.set_counts(ctx, db, pid, body, _if_match(if_match)))
 
 
+@router.patch("/pilots/{pilot_id}/vendor-late-drafts")
+def set_vendor_late_drafts(
+    pilot_id: str,
+    request: Request,
+    body: JsonBody = Body(...),
+    ctx: Ctx = Depends(get_ctx),
+    key: str | None = IdemKey,
+    if_match: str | None = IfMatch,
+) -> JSONResponse:
+    pid = parse_uuid(pilot_id)
+    return _mutate(ctx, request, key, body, lambda db: pilot.set_vendor_late_drafts(ctx, db, pid, body, _if_match(if_match)))
+
+
 @router.get("/pilots/{pilot_id}/report")
 def pilot_report(pilot_id: str, ctx: Ctx = Depends(get_ctx)) -> dict[str, Any]:
     with ctx.tx() as db:

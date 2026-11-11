@@ -12,7 +12,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from sp_core.reconcile import reconcile
-from sp_db.models import Document, EstimateLine, Packet, PacketLine, ParseRun
+from sp_db.models import Document, EstimateLine, Packet, PacketLine, ParseRun, User
 from sp_files import ObjectStore, build_object_key, sha256_hex
 from sp_files.render import DeterministicRenderer, PacketRenderer
 from sp_parsers import ParserError, get_parser
@@ -84,7 +84,11 @@ def make_render_packet(renderer: PacketRenderer) -> Handler:
             raise JobFailure("not_found", retryable=False)
         if packet.purged_at is not None:
             return Outcome("succeeded", {"skipped": "taken_down"})
-        lines = db.execute(select(PacketLine).where(PacketLine.packet_id == packet.id).order_by(PacketLine.line_no)).scalars()
+        lines = list(db.execute(select(PacketLine).where(PacketLine.packet_id == packet.id).order_by(PacketLine.line_no)).scalars())
+        approvers = {
+            u.id: (u.display_name or u.email)
+            for u in db.execute(select(User).where(User.id.in_({pl.approved_by for pl in lines}))).scalars()
+        }
         snapshot = {
             "packet_id": str(packet.id),
             "version": packet.version,
@@ -94,10 +98,17 @@ def make_render_packet(renderer: PacketRenderer) -> Handler:
                     "line_no": pl.line_no,
                     "description": pl.description,
                     "requested_cents": pl.requested_cents,
-                    "approved_by": str(pl.approved_by),
+                    "approved_by": approvers.get(pl.approved_by, str(pl.approved_by)),
                     "evidence": pl.evidence_snapshot,
                 }
                 for pl in lines
+                if pl.request_state == "requested"
+            ],
+            # Withdrawn by this version: listed, never requested (B1-005).
+            "withdrawn": [
+                {"line_no": pl.line_no, "description": pl.description, "previously_requested_cents": pl.requested_cents}
+                for pl in lines
+                if pl.request_state == "withdrawn"
             ],
             "renderer": renderer.name,
         }

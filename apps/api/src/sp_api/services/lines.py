@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
-from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from sp_api.context import Ctx, Problem
+from sp_api.services import inputs
 from sp_api.services.common import check_version, get_or_404, lock_or_404, to_dict
 from sp_api.services.documents import current_run
 from sp_core.approval import (
@@ -186,19 +186,19 @@ def create_line(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any]) -
     if category not in CATEGORIES:
         raise Problem(422, "Invalid category")
     checklist_item_id = None
-    description = str(body.get("description") or "").strip()
+    description = (inputs.text_field(body, "description") or "").strip()
     if origin == "checklist":
-        if not body.get("checklist_item_id"):
-            raise Problem(422, "Checklist item required")
-        item = get_or_404(db, ChecklistItem, uuid.UUID(str(body["checklist_item_id"])))
+        item_id = inputs.a_uuid(body, "checklist_item_id")
+        assert item_id is not None
+        item = get_or_404(db, ChecklistItem, item_id)
         checklist_item_id = item.id
         description = description or item.operation_name
     if "requested_cents" not in body:
         raise Problem(422, "Amount required", "the Estimator types the amount")
-    requested = int(body["requested_cents"])
-    if requested < 0 or not description:
-        raise Problem(422, "Invalid line")
-    hours = body.get("hours_delta")
+    requested = inputs.cents(body, "requested_cents")
+    assert requested is not None
+    if not description:
+        raise Problem(422, "Missing field", "description is required")
     line = SupplementLine(
         tenant_id=ctx.tenant_id,
         ro_id=ro.id,
@@ -207,15 +207,15 @@ def create_line(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any]) -
         checklist_item_id=checklist_item_id,
         description=description,
         requested_cents=requested,
-        hours_delta=Decimal(str(hours)) if hours is not None else None,
-        explanation=body.get("explanation"),
+        hours_delta=inputs.hours(body, "hours_delta"),
+        explanation=inputs.text_field(body, "explanation"),
         created_by=ctx.user_id,
     )
     db.add(line)
     db.flush()
     ctx.audit(db, "line.created", "supplement_line", line.id, None, {"origin": origin, "category": category})
     db.refresh(line)
-    return to_dict(line)
+    return inputs.with_notice(to_dict(line))
 
 
 def patch_line(ctx: Ctx, db: Session, line_id: uuid.UUID, body: dict[str, Any], if_match: int | None) -> dict[str, Any]:
@@ -229,17 +229,19 @@ def patch_line(ctx: Ctx, db: Session, line_id: uuid.UUID, body: dict[str, Any], 
     before = {k: to_dict(line)[k] for k in LINE_EDITABLE if k in body}
     for key in LINE_EDITABLE:
         if key in body:
-            value = body[key]
-            if key == "hours_delta" and value is not None:
-                value = Decimal(str(value))
-            if key == "requested_cents":
-                value = int(value)
+            value: Any = body[key]
+            if key == "hours_delta":
+                value = inputs.hours(body, key)
+            elif key == "requested_cents":
+                value = inputs.cents(body, key)
+            elif key in ("description", "explanation"):
+                value = inputs.text_field(body, key, required=key == "description")
             setattr(line, key, value)
     line.row_version += 1  # any edit returns the line to draft (trigger)
     db.flush()
     db.refresh(line)
     ctx.audit(db, "line.edited", "supplement_line", line.id, before, {k: to_dict(line)[k] for k in before})
-    return to_dict(line)
+    return inputs.with_notice(to_dict(line))
 
 
 def _evidence_items(db: Session, line_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[EvidenceItem]]:
@@ -347,6 +349,7 @@ def add_photos(
     ctx.require(Action.EDIT_LINE, "supplement_line", line.id)
     try:
         validate_photo_attestation(attested=attested, taken_by_shop=taken_by_shop, attestation_note=attestation_note)
+        inputs.text_field({"attestation_note": attestation_note}, "attestation_note")
     except EvidenceError as exc:
         raise Problem(422, "Attestation required", str(exc)) from exc
     results: list[dict[str, Any]] = []
@@ -405,8 +408,10 @@ def add_photos(
 
 
 def _reference_fields(body: dict[str, Any]) -> dict[str, Any]:
-    url = body.get("url") or None
-    note = body.get("note") or None
+    url = inputs.text_field(body, "url", limit=2000)
+    note = inputs.text_field(body, "note")
+    for key in ("publisher", "title", "identifier"):
+        inputs.text_field(body, key)
     try:
         validate_reference(
             material_type=str(body.get("material_type", "")),
@@ -434,8 +439,9 @@ def _reference_fields(body: dict[str, Any]) -> dict[str, Any]:
 def add_reference(ctx: Ctx, db: Session, line_id: uuid.UUID, body: dict[str, Any]) -> dict[str, Any]:
     line = lock_or_404(db, SupplementLine, line_id)
     ctx.require(Action.EDIT_LINE, "supplement_line", line.id)
-    if body.get("reference_id"):
-        ref = get_or_404(db, ReferenceCitation, uuid.UUID(str(body["reference_id"])))
+    ref_id = inputs.a_uuid(body, "reference_id", required=False)
+    if ref_id is not None:
+        ref = get_or_404(db, ReferenceCitation, ref_id)
     else:
         ref = ReferenceCitation(tenant_id=ctx.tenant_id, created_by=ctx.user_id, **_reference_fields(body))
         db.add(ref)
@@ -444,7 +450,7 @@ def add_reference(ctx: Ctx, db: Session, line_id: uuid.UUID, body: dict[str, Any
     db.add(ev)
     db.flush()
     ctx.audit(db, "evidence.reference_attached", "supplement_line", line.id, None, {"reference_id": str(ref.id)})
-    return {"reference": to_dict(ref), "evidence_id": str(ev.id)}
+    return inputs.with_notice({"reference": to_dict(ref), "evidence_id": str(ev.id)})
 
 
 def patch_reference(ctx: Ctx, db: Session, ref_id: uuid.UUID, body: dict[str, Any], if_match: int | None) -> dict[str, Any]:
@@ -468,7 +474,7 @@ def patch_photo(ctx: Ctx, db: Session, photo_id: uuid.UUID, body: dict[str, Any]
     ctx.require(Action.EDIT_LINE, "photo", photo.id)
     check_version(photo, if_match)
     taken = body.get("taken_by_shop", photo.taken_by_shop)
-    note = body.get("attestation_note", photo.attestation_note)
+    note = inputs.text_field(body, "attestation_note") if "attestation_note" in body else photo.attestation_note
     try:
         validate_photo_attestation(attested=body.get("attested"), taken_by_shop=taken, attestation_note=note)
     except EvidenceError as exc:

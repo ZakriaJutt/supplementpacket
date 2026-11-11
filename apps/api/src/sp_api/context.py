@@ -62,6 +62,20 @@ class PermissionDenied(Problem):
         self.entity_id = entity_id
 
 
+class StaleApprovals(Problem):
+    """Approvals whose approver no longer holds the Owner or Estimator role (B1-006)."""
+
+    def __init__(self, line_ids: list[uuid.UUID]) -> None:
+        super().__init__(
+            409,
+            "Packet cannot be frozen",
+            "an approver no longer holds the Owner or Estimator role; those lines returned to draft",
+            problems=[{"item": f"line:{i}", "reason": "approver no longer permitted"} for i in line_ids],
+            changed=[],
+        )
+        self.line_ids = line_ids
+
+
 @dataclass
 class AppState:
     settings: Settings
@@ -125,6 +139,12 @@ class Ctx:
         """Written in its own transaction: the refused change itself rolled back."""
         with self.tx() as db:
             self.audit(db, "permission.denied", exc.entity_type, exc.entity_id, None, {"action": exc.action.value, "role": self.role.value})
+
+    def reset_lines(self, line_ids: list[uuid.UUID], reason: str) -> None:
+        """Committed in its own transaction: the refused freeze itself rolled back."""
+        with self.tx() as db:
+            for line_id in line_ids:
+                db.execute(text("SELECT sp_reset_line(:i, :r)"), {"i": line_id, "r": reason})
 
     def idempotent(
         self,

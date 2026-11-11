@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from sp_api.context import Ctx, Problem
+from sp_api.services import inputs
 from sp_api.services.common import check_version, get_or_404, lock_or_404, to_dict
 from sp_core.jobs import decide_transition
 from sp_core.permissions import Action
@@ -58,25 +58,29 @@ LINE_EDITABLE = (
 
 def create_ro(ctx: Ctx, db: Session, body: dict[str, Any]) -> dict[str, Any]:
     ctx.require(Action.EDIT_RO, "repair_order", uuid.UUID(int=0))
-    location_id = uuid.UUID(str(body["location_id"]))
+    location_id = inputs.a_uuid(body, "location_id")
+    assert location_id is not None
     get_or_404(db, Location, location_id)
+    ro_number = inputs.text_field(body, "ro_number", required=True)
+    assert ro_number is not None
     ro = RepairOrder(
         tenant_id=ctx.tenant_id,
         location_id=location_id,
-        ro_number=str(body["ro_number"]).strip(),
-        insurer_id=uuid.UUID(str(body["insurer_id"])) if body.get("insurer_id") else None,
-        claim_number=body.get("claim_number") or None,  # "not provided" stays null
-        adjuster_name=body.get("adjuster_name") or None,
-        adjuster_email=body.get("adjuster_email") or None,
-        vin=body.get("vin") or None,
-        vehicle_desc=body.get("vehicle_desc") or None,
+        ro_number=ro_number.strip(),
+        insurer_id=inputs.a_uuid(body, "insurer_id", required=False),
+        claim_number=inputs.text_field(body, "claim_number"),  # "not provided" stays null
+        adjuster_name=inputs.text_field(body, "adjuster_name"),
+        adjuster_email=inputs.text_field(body, "adjuster_email"),
+        vin=inputs.text_field(body, "vin", limit=17),
+        vehicle_desc=inputs.text_field(body, "vehicle_desc"),
+        email_free_paragraph=inputs.text_field(body, "email_free_paragraph"),
         created_by=ctx.user_id,
     )
     db.add(ro)
     db.flush()
     ctx.audit(db, "ro.created", "repair_order", ro.id, None, {"ro_number": ro.ro_number})
     db.refresh(ro)
-    return to_dict(ro)
+    return inputs.with_notice(to_dict(ro))
 
 
 def patch_ro(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any], if_match: int | None) -> dict[str, Any]:
@@ -86,14 +90,21 @@ def patch_ro(ctx: Ctx, db: Session, ro_id: uuid.UUID, body: dict[str, Any], if_m
     before = {k: getattr(ro, k) for k in RO_EDITABLE if k in body}
     for key in RO_EDITABLE:
         if key in body:
-            value = body[key]
-            if key == "insurer_id" and value:
-                value = uuid.UUID(str(value))
-            setattr(ro, key, value if value != "" else None)
+            if key == "insurer_id":
+                value: Any = inputs.a_uuid(body, key, required=False)
+            elif key == "status":
+                value = body[key]
+                if value not in ("open", "closed"):
+                    raise Problem(422, "Invalid status")
+            else:
+                value = inputs.text_field(body, key, limit=17 if key == "vin" else None)
+                if key == "ro_number" and value is None:
+                    raise Problem(422, "Missing field", "ro_number is required")
+            setattr(ro, key, value)
     ro.row_version += 1
     db.flush()
     ctx.audit(db, "ro.updated", "repair_order", ro.id, before, {k: getattr(ro, k) for k in before})
-    return to_dict(ro)
+    return inputs.with_notice(to_dict(ro))
 
 
 def enqueue_job(ctx: Ctx, db: Session, kind: str, subject_id: uuid.UUID, idempotency_key: str, result: Any = None) -> Job:
@@ -135,6 +146,9 @@ def store_document(
     if content_type not in allowed_types:
         raise Problem(415, "Unsupported file type", "the file content is not an accepted type")
     digest = sha256_hex(data)
+    # Lock before the existence check so concurrent uploads of the same file under different keys
+    # all receive the existing document instead of a unique-constraint conflict.
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"doc:{ro.id}:{purpose}"})
     existing = db.execute(
         select(Document).where(Document.ro_id == ro.id, Document.purpose == purpose, Document.sha256 == bytes.fromhex(digest))
     ).scalar_one_or_none()
@@ -145,7 +159,6 @@ def store_document(
             .first()
         )
         return existing, job, False
-    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"doc:{ro.id}:{purpose}"})
     version = (db.execute(select(func.max(Document.version)).where(Document.ro_id == ro.id, Document.purpose == purpose)).scalar() or 0) + 1
     doc_id = uuid.uuid4()
     key = build_object_key(
@@ -180,22 +193,48 @@ def current_run(db: Session, document_id: uuid.UUID) -> ParseRun | None:
     return db.execute(select(ParseRun).where(ParseRun.document_id == document_id, ParseRun.is_current.is_(True))).scalar_one_or_none()
 
 
-def _line_from(body: dict[str, Any], index: int) -> dict[str, Any]:
-    hours = body.get("labor_hours")
-    return {
-        "line_no": int(body.get("line_no", index + 1)),
-        "page": body.get("page"),
-        "section": body.get("section"),
-        "operation": body["operation"],
-        "description": str(body["description"]),
-        "part_number": body.get("part_number"),
-        "part_type": body.get("part_type"),
-        "part_price_cents": body.get("part_price_cents"),
-        "labor_hours": Decimal(str(hours)) if hours is not None else None,
-        "labor_type": body.get("labor_type"),
-        "labor_rate_cents": body.get("labor_rate_cents"),
-        "line_total_cents": int(body["line_total_cents"]),
-    }
+_OPERATIONS = ("replace", "repair", "remove_install", "refinish", "blend", "sublet", "scan", "calibrate", "materials", "other")
+_PART_TYPES = ("oem", "aftermarket", "recycled", "remanufactured")
+
+
+def _line_fields(body: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key in keys:
+        if key not in body:
+            continue
+        if key in ("part_price_cents", "labor_rate_cents"):
+            out[key] = inputs.cents(body, key, required=False)
+        elif key == "line_total_cents":
+            out[key] = inputs.cents(body, key, allow_negative=True)
+        elif key == "labor_hours":
+            out[key] = inputs.hours(body, key)
+        elif key == "operation":
+            if body[key] not in _OPERATIONS:
+                raise Problem(422, "Invalid operation", field=key)
+            out[key] = body[key]
+        elif key == "part_type":
+            if body[key] is not None and body[key] not in _PART_TYPES:
+                raise Problem(422, "Invalid part type", field=key)
+            out[key] = body[key]
+        elif key == "description":
+            out[key] = inputs.text_field(body, key, required=True)
+        elif key in ("page", "line_no"):
+            out[key] = inputs.an_int(body, key, minimum=1)
+        else:
+            out[key] = inputs.text_field(body, key)
+    return out
+
+
+def _line_from(body: Any, index: int) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise Problem(422, "Invalid line")
+    for key in ("operation", "description", "line_total_cents"):
+        inputs.req(body, key)
+    fields = _line_fields(body, ("line_no", "page", "section", *LINE_EDITABLE))
+    fields.setdefault("line_no", index + 1)
+    if fields["line_no"] is None:
+        fields["line_no"] = index + 1
+    return fields
 
 
 def manual_entry(ctx: Ctx, db: Session, document_id: uuid.UUID, body: dict[str, Any]) -> dict[str, Any]:
@@ -204,11 +243,12 @@ def manual_entry(ctx: Ctx, db: Session, document_id: uuid.UUID, body: dict[str, 
     ctx.require(Action.EDIT_RO, "document", doc.id)
     if doc.purpose not in ESTIMATE_PURPOSES:
         raise Problem(422, "Not an estimate")
-    lines = [_line_from(item, i) for i, item in enumerate(body.get("lines", []))]
-    if not lines:
+    raw_lines = body.get("lines")
+    if not isinstance(raw_lines, list) or not raw_lines:
         raise Problem(422, "No lines")
-    printed = body.get("printed_total_cents")
-    rec = reconcile((x["line_total_cents"] for x in lines), int(printed) if printed is not None else None)
+    lines = [_line_from(item, i) for i, item in enumerate(raw_lines)]
+    printed = inputs.cents(body, "printed_total_cents", required=False, allow_negative=True)
+    rec = reconcile((x["line_total_cents"] for x in lines), printed)
     db.execute(text("UPDATE parse_runs SET is_current = false WHERE document_id = :d AND is_current"), {"d": doc.id})
     run = ParseRun(
         tenant_id=ctx.tenant_id,
@@ -246,12 +286,8 @@ def patch_estimate_line(ctx: Ctx, db: Session, line_id: uuid.UUID, body: dict[st
     ctx.require(Action.EDIT_RO, "estimate_line", line.id)
     check_version(line, if_match)
     before = {k: to_dict(line)[k] for k in LINE_EDITABLE if k in body}
-    for key in LINE_EDITABLE:
-        if key in body:
-            value = body[key]
-            if key == "labor_hours" and value is not None:
-                value = Decimal(str(value))
-            setattr(line, key, value)
+    for key, value in _line_fields(body, LINE_EDITABLE).items():
+        setattr(line, key, value)
     line.row_version += 1
     line.edited_by = ctx.user_id
     db.flush()  # the trigger resets every supplement line that depends on this source line
@@ -268,6 +304,8 @@ def confirm_reconcile(ctx: Ctx, db: Session, document_id: uuid.UUID, reason: str
     run = current_run(db, doc.id)
     if run is None or run.status != "unreconciled":
         raise Problem(409, "Nothing to confirm", "the current parse is not unreconciled")
+    if len(reason) > inputs.LIMITS["reason"]:
+        raise Problem(422, "Text too long", "reason is limited to 500 characters")
     if len((reason or "").strip()) < 10:
         raise Problem(422, "Reason required", "confirm each total with a reason of at least 10 characters")
     run.confirm_reason = reason.strip()
