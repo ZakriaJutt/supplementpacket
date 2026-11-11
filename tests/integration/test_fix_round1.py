@@ -177,7 +177,13 @@ def test_b1_003_refund_undetermined_until_inputs_recorded(api: dict[str, Api], s
     assert report["conditions"][0]["met"] is True
     assert report["conditions"][1]["met"] == "undetermined"  # vendor-late drafts not recorded, fewer than 8 packets
     assert report["refund_result"] in ("undetermined", "not_due")
-    draft = {"draft_reference": "HAND-RUN-07", "requested_at": "2026-11-02T09:00:00-08:00", "returned_at": "2026-11-05T16:00:00-08:00"}
+    late_ro = create_ro(api["estimator"], shop)
+    draft = {
+        "ro_id": late_ro["id"],
+        "draft_reference": "HAND-RUN-07",
+        "requested_at": "2026-11-02T09:00:00-08:00",
+        "returned_at": "2026-11-05T16:00:00-08:00",
+    }
     assert office.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json=draft).status_code == 403
     assert (
         op.post(
@@ -398,3 +404,102 @@ def test_b1_003_round2_counts_raised_after_day7_api(api: dict[str, Api], shop: S
     assert any("values in force at the end of day 7" in f for f in report["flags"])
     r = office.patch(f"/pilots/{shop.pilot_id}/counts", json={"baseline_supplemented_ro_count": None}, headers={"If-Match": "3"})
     assert _report(owner, shop)["expected_cents"] == 4800  # clearing after day 7 does not change the day-7 value
+
+
+# Fix after round-3 retest (B1-003 residue) -----------------------------------------------------------
+def _late(ro_id: str, ref: str, packet_id: str | None = None) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "ro_id": ro_id,
+        "draft_reference": ref,
+        "requested_at": f"{TODAY - timedelta(days=6)}T09:00:00-08:00",
+        "returned_at": f"{TODAY - timedelta(days=1)}T16:00:00-08:00",
+    }
+    if packet_id:
+        body["packet_id"] = packet_id
+    return body
+
+
+def test_b1_003_round3_late_draft_counts_once_per_repair_order(
+    client: TestClient, api: dict[str, Api], shop: Shop, other_shop: Shop, owner_engine: Any
+) -> None:
+    """Reviewer r3 and r5 through the API: 8 sent with 7 documents, then late rows for one repair order."""
+    est, owner, op = api["estimator"], api["owner"], api["operator"]
+    _backdate(owner_engine, "UPDATE pilots SET start_date = :d WHERE id = :p", {"d": TODAY - timedelta(days=2), "p": str(shop.pilot_id)})
+    sent = []
+    for i in range(8):
+        ro, _, packet = _sent_ro(est, shop, 10000)
+        if i < 7:
+            doc = _response_doc(est, packet["packet"]["id"])
+            r = _response(
+                est, packet["lines"][0], response_status="approved_full", response_date=TODAY.isoformat(), response_document_id=doc
+            )
+            assert r.status_code == 200, r.text
+        sent.append((ro, packet))
+    assert op.patch(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json={"complete": True}, headers={"If-Match": "1"}).status_code == 200
+    c = _report(owner, shop)["conditions"][2]
+    assert c["met"] is True and c["detail"].startswith("7 of 8")
+    # A late draft for a repair order whose packet was sent: accepted, but that RO already counts.
+    ro0, p0 = sent[0]
+    assert (
+        op.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json=_late(ro0["id"], "RO-0 draft", p0["packet"]["id"])).status_code == 201
+    )
+    assert op.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json=_late(ro0["id"], "ro-0 draft (again)")).status_code == 409
+    report = _report(owner, shop)
+    assert report["conditions"][2]["met"] is True and report["conditions"][2]["detail"].startswith("7 of 8")
+    assert len(report["counted_packet_ids"]) == 8 and any("not counted again" in f for f in report["flags"])
+    # A repair order with no sent packet: one late draft joins (c)'s denominator once; a reworded repeat is refused.
+    unsent = create_ro(est, shop)
+    assert op.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json=_late(unsent["id"], "LATE-9")).status_code == 201
+    assert op.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json=_late(unsent["id"], "late-9")).status_code == 409
+    report = _report(owner, shop)
+    assert report["conditions"][2]["detail"].startswith("7 of 9") and report["conditions"][2]["met"] is False  # UT-11 rule
+    assert len(report["counted_packet_ids"]) == 9
+    rows = owner.get(f"/pilots/{shop.pilot_id}/vendor-late-drafts").json()
+    assert sorted((d["ro_id"], d["packet_id"]) for d in rows) == sorted([(ro0["id"], p0["packet"]["id"]), (unsent["id"], None)])
+    # Another tenant's repair order is not found; a packet from another repair order is refused.
+    other_ro = create_ro(Api(client, other_shop.tokens["estimator"]), other_shop)
+    assert op.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json=_late(other_ro["id"], "X")).status_code == 404
+    ro1, _ = sent[1]
+    assert op.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json=_late(ro1["id"], "Y", p0["packet"]["id"])).status_code == 422
+    assert op.post(f"/pilots/{shop.pilot_id}/vendor-late-drafts", json={**_late(ro1["id"], "Z"), "ro_id": None}).status_code == 422
+
+
+def test_b1_003_round3_pm1_uses_counts_in_force_at_day90_api(api: dict[str, Api], shop: Shop, owner_engine: Any) -> None:
+    """Reviewer r4 through the API: counts changed after day 90 do not move PM-1."""
+    owner, office = api["owner"], api["office"]
+    for i in range(10):
+        office.post(
+            "/baseline-ros",
+            json={
+                "location_id": str(shop.location_id),
+                "ro_label": f"B{i}",
+                "closed_month": "2026-07-01",
+                "requested_cents": 2000,
+                "approved_cents": 1000,
+                "collected_cents": 1000,
+                "source_note": "synthetic",
+            },
+        )
+    r = office.patch(
+        f"/pilots/{shop.pilot_id}/counts",
+        json={"baseline_insurer_ro_count": 100, "baseline_supplemented_ro_count": 12, "window_insurer_ro_count": 40},
+        headers={"If-Match": "1"},
+    )
+    assert r.status_code == 200
+    _backdate(owner_engine, "UPDATE pilots SET start_date = :d WHERE id = :p", {"d": TODAY - timedelta(days=95), "p": str(shop.pilot_id)})
+    _backdate(
+        owner_engine,
+        "UPDATE pilot_count_events SET recorded_at = :t WHERE pilot_id = :p",
+        {"t": f"{TODAY - timedelta(days=60)} 12:00-08:00", "p": str(shop.pilot_id)},
+    )
+    full = owner.get(f"/pilots/{shop.pilot_id}/report").json()
+    assert full["pm1_incremental_collected_cents"] == -4800  # 12000 / 100 x 40
+    assert not any("day 90" in f for f in full["pm1_flags"])
+    for version, value in ((2, 30), (3, 5), (4, None)):
+        r = office.patch(
+            f"/pilots/{shop.pilot_id}/counts", json={"baseline_supplemented_ro_count": value}, headers={"If-Match": str(version)}
+        )
+        assert r.status_code == 200, r.text
+        full = owner.get(f"/pilots/{shop.pilot_id}/report").json()
+        assert full["pm1_incremental_collected_cents"] == -4800, value  # the day-90 value, not the current one
+        assert any("in force at the end of day 90" in f for f in full["pm1_flags"])

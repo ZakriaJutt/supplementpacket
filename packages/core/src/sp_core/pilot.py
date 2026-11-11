@@ -22,6 +22,7 @@ from sp_core.money import round_half_up, round_up
 __all__ = [
     "APPROVED_CUTOFF_DAYS",
     "COLLECTED_CUTOFF_DAYS",
+    "PM1_READING_DAY",
     "BaselineRow",
     "BaselineTotal",
     "Condition",
@@ -32,14 +33,17 @@ __all__ = [
     "PilotTerms",
     "RefundTest",
     "baseline_total",
+    "counts_in_force",
     "pm1_incremental_collected",
     "pm2_checklist_collected",
+    "qualifying_units",
     "refund_test",
     "value_in_force",
 ]
 
 APPROVED_CUTOFF_DAYS = 60
 COLLECTED_CUTOFF_DAYS = 90
+PM1_READING_DAY = 90  # PM-1 (gate C) is read at the end of pilot day 90 (Decision 9, PRD 11)
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,11 @@ class PilotPacket:
     vendor_draft_late: bool = False  # vendor returned the draft later than 1 business day
     collected_evidenced_cents_day90: int = 0
     checklist_approved_cents: int = 0
+    ro_key: str | None = None  # the repair order this unit belongs to; one qualifying unit per repair order
+
+    @property
+    def unit_key(self) -> str:
+        return self.ro_key if self.ro_key is not None else self.packet_id
 
     @property
     def qualifying(self) -> bool:
@@ -186,9 +195,42 @@ class CountEvent:
 
 
 def value_in_force(history: Sequence[CountEvent], field_name: str, at: datetime) -> int | None:
-    """The last value recorded for ``field_name`` at or before ``at`` (None if none or cleared)."""
-    earlier = [e for e in history if e.field == field_name and e.recorded_at <= at]
-    return max(earlier, key=lambda e: e.recorded_at).value if earlier else None
+    """The last value recorded for ``field_name`` at or before ``at`` (None if none or cleared).
+
+    Two events at the identical instant resolve to the later one in ``history`` order, so the
+    caller passes the history in recording order (the database sequence).
+    """
+    earlier = [(e.recorded_at, i, e) for i, e in enumerate(history) if e.field == field_name and e.recorded_at <= at]
+    return max(earlier, key=lambda t: (t[0], t[1]))[2].value if earlier else None
+
+
+def counts_in_force(history: Sequence[CountEvent], at: datetime) -> PilotCounts:
+    """The three pilot counts as they stood at ``at``."""
+    return PilotCounts(
+        value_in_force(history, "baseline_insurer_ro_count", at),
+        value_in_force(history, "baseline_supplemented_ro_count", at),
+        value_in_force(history, "window_insurer_ro_count", at),
+    )
+
+
+def qualifying_units(packets: Sequence[PilotPacket]) -> tuple[list[PilotPacket], list[PilotPacket]]:
+    """Qualifying units, at most one per repair order, and the vendor-late drafts not counted.
+
+    A packet sent in the window always counts. A vendor-late draft counts only when its repair
+    order has no packet sent in the window and no earlier late draft, so one late repair order
+    counts once in condition (b) and once in condition (c)'s denominator (B1-003, round 3).
+    """
+    sent = [p for p in packets if p.sent_in_window]
+    seen = {p.unit_key for p in sent}
+    counted = list(sent)
+    dropped: list[PilotPacket] = []
+    for p in sorted((p for p in packets if p.vendor_draft_late and not p.sent_in_window), key=lambda p: p.packet_id):
+        if p.unit_key in seen:
+            dropped.append(p)
+            continue
+        seen.add(p.unit_key)
+        counted.append(p)
+    return sorted(counted, key=lambda p: p.packet_id), dropped
 
 
 @dataclass(frozen=True)
@@ -255,7 +297,9 @@ def refund_test(
             flags.append("baseline counts changed after day 7; the refund test uses the values in force at the end of day 7")
         if deadline.baseline_insurer_ro_count is not None and deadline.baseline_supplemented_ro_count is not None:
             counts = deadline
-    qualifying = sorted((p for p in packets if p.qualifying), key=lambda p: p.packet_id)
+    qualifying, dropped = qualifying_units(packets)
+    if dropped:
+        flags.append(f"{len(dropped)} vendor-late drafts not counted again: their repair order is already counted")
     pilot_approved = sum(p.insurer_approved_cents_day60 for p in qualifying)
 
     base = baseline_total(baseline_rows, counts, "approved", terms.min_baseline)
@@ -297,7 +341,10 @@ def refund_test(
 
     late = [p for p in qualifying if p.vendor_draft_late and not p.sent_in_window]
     b_met: bool | None = len(qualifying) >= terms.min_packets
-    b_detail = f"{len(qualifying)} qualifying packets (minimum {terms.min_packets}), of which {len(late)} vendor-late drafts"
+    b_detail = (
+        f"{len(qualifying)} qualifying packets (minimum {terms.min_packets}), of which {len(late)} vendor-late drafts "
+        f"on repair orders with no packet sent in the window"
+    )
     if not b_met and not late_drafts_recorded:
         b_met = None
         b_detail += "; vendor-late drafts are not recorded, so undetermined"
@@ -346,27 +393,52 @@ class PilotMetrics:
 
 
 def pm1_incremental_collected(
-    counts: PilotCounts, baseline_rows: Sequence[BaselineRow], packets: Sequence[PilotPacket], min_rows: int = 10
+    counts: PilotCounts,
+    baseline_rows: Sequence[BaselineRow],
+    packets: Sequence[PilotPacket],
+    min_rows: int = 10,
+    *,
+    terms: PilotTerms | None = None,
+    count_history: Sequence[CountEvent] | None = None,
 ) -> PilotMetrics:
-    """PM-1: evidenced collected on qualifying packets minus baseline collected rate x N."""
+    """PM-1: evidenced collected on qualifying packets minus baseline collected rate x N.
+
+    With ``terms`` and ``count_history``, the three counts are the values in force at the end of
+    pilot day 90, PM-1's own reading time; a later change is flagged and does not count, and a
+    count first supplied after day 90 is missing (B1-003, round 3). Without a history the current
+    counts are used.
+    """
+    flags: list[str] = []
+    if count_history is not None:
+        if terms is None:
+            raise ValueError("terms are needed to read the counts in force at day 90")
+        at = pilot_day_end(terms.start_date, PM1_READING_DAY, terms.timezone)
+        in_force = counts_in_force(count_history, at)
+        if in_force != counts:
+            flags.append(
+                f"pilot counts changed after day {PM1_READING_DAY}; PM-1 uses the values in force at the end of day {PM1_READING_DAY}"
+            )
+        counts = in_force
     base = baseline_total(baseline_rows, counts, "collected", min_rows)
+    flags += list(base.flags)
     missing = list(base.missing)
     if counts.window_insurer_ro_count is None:
         missing.append("window insurer-paid RO count (N)")
     if counts.baseline_insurer_ro_count == 0:
         missing.append("baseline insurer-paid RO count is 0")
     if missing:
-        return PilotMetrics(False, tuple(missing), None, base.flags)
+        return PilotMetrics(False, tuple(missing), None, tuple(flags))
     assert base.total_cents is not None and counts.baseline_insurer_ro_count and counts.window_insurer_ro_count is not None
-    collected = sum(p.collected_evidenced_cents_day90 for p in packets if p.qualifying)
+    qualifying, _ = qualifying_units(packets)
+    collected = sum(p.collected_evidenced_cents_day90 for p in qualifying)
     expected = round_up(base.total_cents / counts.baseline_insurer_ro_count * counts.window_insurer_ro_count)
-    return PilotMetrics(True, (), collected - expected, base.flags)
+    return PilotMetrics(True, (), collected - expected, tuple(flags))
 
 
 def pm2_checklist_collected(packets: Sequence[PilotPacket]) -> PilotMetrics:
     """PM-2: collected x (checklist-approved / all approved), summed; an allocation."""
     total = Fraction(0)
-    for p in packets:
-        if p.qualifying and p.insurer_approved_cents_day60 > 0:
+    for p in qualifying_units(packets)[0]:
+        if p.insurer_approved_cents_day60 > 0:
             total += Fraction(p.collected_evidenced_cents_day90 * p.checklist_approved_cents, p.insurer_approved_cents_day60)
     return PilotMetrics(True, (), round_half_up(total), ("allocation: payments arrive per RO",))

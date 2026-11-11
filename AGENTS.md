@@ -2,7 +2,7 @@
 
 Canonical instructions for any agent or developer working in this repository. [CLAUDE.md](CLAUDE.md) adds product-specific guidance and defers to this file.
 
-**State of the repository:** build milestone B1 (foundation and deterministic core) implemented on branch `feat/b1-foundation`, not yet merged. The owner authorised implementation on 2026-11-11, before the Phase 0 sales gate G1 passed ([verification-report-fixing.md section 9](verification-report-fixing.md#9-build-milestone-b1-2026-11-11)). Python packages under `apps/` and `packages/`, one Alembic migration, scripts and tests exist; there is no web frontend, no real provider integration and no deployment. Commands marked **exists** in [section 11](#11-utilities-index-b1) are implemented; every other command named in these documents is still **proposed**.
+**State of the repository:** build milestone B1 (foundation and deterministic core) implemented on branch `feat/b1-foundation`, not yet merged. The owner authorised implementation on 2026-11-11, before the Phase 0 sales gate G1 passed ([verification-report-fixing.md section 9](verification-report-fixing.md#9-build-milestone-b1-2026-11-11)). Python packages under `apps/` and `packages/`, four Alembic migrations, scripts and tests exist; there is no web frontend, no real provider integration and no deployment. Commands marked **exists** in [section 11](#11-utilities-index-b1) are implemented; every other command named in these documents is still **proposed**.
 
 ## 1. Reading order
 
@@ -105,7 +105,7 @@ Search here before adding a helper (R-03). Each lives once; `scripts/check_bound
 | Approval checks and fingerprints | `packages/core/src/sp_core/approval.py` | Line fingerprint, review components and fingerprint, freeze blockers |
 | Email draft and its amount rule | `packages/core/src/sp_core/email_draft.py` | UT-19 |
 | Three-amount ledger, response and payment rules | `packages/core/src/sp_core/ledger.py` | UT-09, UT-10, UT-17, UT-18 |
-| Baseline, refund test, PM-1, PM-2 | `packages/core/src/sp_core/pilot.py` | Decision 5.1; UT-11, UT-12 |
+| Baseline, refund test, PM-1, PM-2, qualifying units, counts in force | `packages/core/src/sp_core/pilot.py` | Decision 5.1; UT-11, UT-12; `qualifying_units` (one per repair order), `counts_in_force` (count history) |
 | Permission table | `packages/core/src/sp_core/permissions.py` | Schema section 5 |
 | Job state machine | `packages/core/src/sp_core/jobs.py` | Compare-and-set on `state_version` |
 | Reference URL rule, photo attestation | `packages/core/src/sp_core/evidence.py` | AD-06 |
@@ -114,7 +114,7 @@ Search here before adding a helper (R-03). Each lives once; `scripts/check_bound
 | Packet renderer interface | `packages/files/src/sp_files/render.py` | Deterministic stand-in only in B1 |
 | Parser interface and registry | `packages/parsers/src/sp_parsers/__init__.py` | No real parser yet (T-3.1.3 blocked) |
 | ORM models, tenant transaction | `packages/db/src/sp_db/models.py`, `session.py` | `tenant_transaction` sets tenant, user, role and correlation ID |
-| Approval reset, immutability, append-only audit | Migrations `20261111_0001`, `20261111_0002`, `20261111_0003` (SQL functions and triggers) | `sp_reset_line` is the one reset function; approver demotion resets approvals |
+| Approval reset, immutability, append-only audit | Migrations `20261111_0001` to `20261111_0004` (SQL functions and triggers) | `sp_reset_line` is the one reset function; approver demotion resets approvals |
 
 | Command | State | What it does |
 |---|---|---|

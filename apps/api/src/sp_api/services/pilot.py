@@ -134,9 +134,24 @@ def count_history_view(db: Session, pilot_id: uuid.UUID) -> list[dict[str, Any]]
 
 
 def add_vendor_late_draft(ctx: Ctx, db: Session, pilot_id: uuid.UUID, body: dict[str, Any]) -> dict[str, Any]:
-    """The vendor records one late draft: reference, request and return times, recorder (B1-003)."""
+    """The vendor records one late draft: repair order, optional packet, reference, times, recorder (B1-003).
+
+    Each row names the repair order the draft was for (and the packet frozen from it, if any). One
+    late draft per repair order per pilot (unique constraint; a second gives 409), so one late repair
+    order counts once in conditions (b) and (c) (B1-003, round 3).
+    """
     pilot = get_or_404(db, Pilot, pilot_id)
     ctx.require(Action.RECORD_VENDOR_DRAFTS, "pilot", pilot.id)
+    ro_id = inputs.a_uuid(body, "ro_id")
+    assert ro_id is not None
+    ro = get_or_404(db, RepairOrder, ro_id)
+    if ro.location_id != pilot.location_id:
+        raise Problem(422, "Repair order not in this pilot", "the repair order belongs to another location")
+    packet_id = inputs.a_uuid(body, "packet_id", required=False)
+    if packet_id is not None:
+        packet = get_or_404(db, Packet, packet_id)
+        if packet.ro_id != ro.id:
+            raise Problem(422, "Packet not on this repair order", "the packet belongs to another repair order")
     reference = inputs.text_field(body, "draft_reference", required=True, limit=100)
     requested_at = inputs.a_datetime(body, "requested_at")
     returned_at = inputs.a_datetime(body, "returned_at", required=False)
@@ -151,6 +166,8 @@ def add_vendor_late_draft(ctx: Ctx, db: Session, pilot_id: uuid.UUID, body: dict
     row = VendorLateDraft(
         tenant_id=ctx.tenant_id,
         pilot_id=pilot.id,
+        ro_id=ro.id,
+        packet_id=packet_id,
         draft_reference=reference,
         requested_at=requested_at,
         returned_at=returned_at,
@@ -159,7 +176,14 @@ def add_vendor_late_draft(ctx: Ctx, db: Session, pilot_id: uuid.UUID, body: dict
     )
     db.add(row)
     db.flush()
-    ctx.audit(db, "pilot.vendor_late_draft_recorded", "pilot", pilot.id, None, {"draft_reference": reference})
+    ctx.audit(
+        db,
+        "pilot.vendor_late_draft_recorded",
+        "pilot",
+        pilot.id,
+        None,
+        {"draft_reference": reference, "ro_id": str(ro.id), "packet_id": str(packet_id) if packet_id else None},
+    )
     return to_dict(row)
 
 
@@ -198,9 +222,10 @@ def _pilot_packets(db: Session, pilot: Pilot, timezone: str) -> tuple[list[Pilot
     day60_end = pilot_day_end(pilot.start_date, 60, timezone)
     day90 = pilot_day_date(pilot.start_date, 90)
     ro_ids = list(db.execute(select(RepairOrder.id).where(RepairOrder.location_id == pilot.location_id)).scalars())
-    # Drafts the vendor returned later than 1 business day count as qualifying for (b) and join (c)'s denominator.
+    # Drafts the vendor returned later than 1 business day count as qualifying for (b) and join (c)'s
+    # denominator, once per repair order and not in addition to that repair order's sent packet.
     out: list[PilotPacket] = [
-        PilotPacket(f"vendor-late-draft:{d.draft_reference}", 0, False, False, vendor_draft_late=True)
+        PilotPacket(f"vendor-late-draft:{d.draft_reference}", 0, False, False, vendor_draft_late=True, ro_key=str(d.ro_id))
         for d in db.execute(select(VendorLateDraft).where(VendorLateDraft.pilot_id == pilot.id)).scalars()
     ]
     excluded: list[dict[str, str]] = []
@@ -272,6 +297,7 @@ def _pilot_packets(db: Session, pilot: Pilot, timezone: str) -> tuple[list[Pilot
                 sent_in_window=True,
                 collected_evidenced_cents_day90=collected,
                 checklist_approved_cents=checklist,
+                ro_key=str(first.ro_id),
             )
         )
     return out, excluded
@@ -303,18 +329,16 @@ def pilot_report(db: Session, pilot_id: uuid.UUID) -> dict[str, Any]:
         min_response_share=Fraction(pilot.min_response_share),
     )
     packets, excluded = _pilot_packets(db, pilot, tenant.timezone)
+    history = [
+        CountEvent(e.field, e.value, e.recorded_at)
+        for e in db.execute(
+            select(PilotCountEvent).where(PilotCountEvent.pilot_id == pilot.id).order_by(PilotCountEvent.id)  # recording order
+        ).scalars()
+    ]
     test = refund_test(
-        terms,
-        counts,
-        rows,
-        packets,
-        count_history=[
-            CountEvent(e.field, e.value, e.recorded_at)
-            for e in db.execute(select(PilotCountEvent).where(PilotCountEvent.pilot_id == pilot.id)).scalars()
-        ],
-        late_drafts_recorded=pilot.vendor_late_drafts_recorded_at is not None,
+        terms, counts, rows, packets, count_history=history, late_drafts_recorded=pilot.vendor_late_drafts_recorded_at is not None
     )
-    pm1 = pm1_incremental_collected(counts, rows, packets, pilot.min_baseline)
+    pm1 = pm1_incremental_collected(counts, rows, packets, pilot.min_baseline, terms=terms, count_history=history)
     pm2 = pm2_checklist_collected(packets)
     return {
         "pilot_id": str(pilot.id),
@@ -337,6 +361,7 @@ def pilot_report(db: Session, pilot_id: uuid.UUID) -> dict[str, Any]:
         },
         "pm1_incremental_collected_cents": pm1.value_cents if pm1.computable else "not computable",
         "pm1_missing": list(pm1.missing),
+        "pm1_flags": list(pm1.flags),
         "pm2_checklist_collected_cents": pm2.value_cents,
         "count_history": count_history_view(db, pilot.id),
         "vendor_late_drafts": vendor_drafts_view(db, pilot.id),

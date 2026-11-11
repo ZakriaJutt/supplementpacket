@@ -706,6 +706,8 @@ class VendorLateDraft(Base):
     id: Mapped[uuid.UUID] = _pk()
     tenant_id: Mapped[uuid.UUID] = _tenant()
     pilot_id: Mapped[uuid.UUID] = mapped_column(UUIDT, nullable=False)
+    ro_id: Mapped[uuid.UUID] = mapped_column(UUIDT, nullable=False)  # one late draft per repair order (B1-003 round 3)
+    packet_id: Mapped[uuid.UUID | None] = mapped_column(UUIDT)  # the packet frozen from the draft, if any
     draft_reference: Mapped[str] = mapped_column(Text, nullable=False)
     requested_at: Mapped[datetime] = mapped_column(TS, nullable=False)
     returned_at: Mapped[datetime | None] = mapped_column(TS)
@@ -718,6 +720,11 @@ class VendorLateDraft(Base):
         CheckConstraint("returned_at IS NULL OR returned_at >= requested_at", name="ck_vendor_late_drafts_order"),
         UniqueConstraint("tenant_id", "pilot_id", "draft_reference", name="uq_vendor_late_drafts_ref"),
         ForeignKeyConstraint(["tenant_id", "pilot_id"], ["pilots.tenant_id", "pilots.id"], name="fk_vendor_late_drafts_pilot"),
+        UniqueConstraint("tenant_id", "pilot_id", "ro_id", name="uq_vendor_late_drafts_ro"),
+        ForeignKeyConstraint(["tenant_id", "ro_id"], ["repair_orders.tenant_id", "repair_orders.id"], name="fk_vendor_late_drafts_ro"),
+        ForeignKeyConstraint(
+            ["tenant_id", "ro_id", "packet_id"], ["packets.tenant_id", "packets.ro_id", "packets.id"], name="fk_vendor_late_drafts_packet"
+        ),
     )
 
 

@@ -358,3 +358,42 @@ B1-008 (bare numbers) and B1-011 (photo re-encoding and metadata removal) remain
 | `make boundaries` | 0 violations |
 | `make heads` | 1 head (`20261111_0003`) |
 | `make parity` | 0 differences; 13 integrity triggers present; row-level security on all 24 tenant tables |
+
+
+### 9.3 Independent retest (round 3, 2026-11-11) and fix after retest
+
+Reviewer verdicts, copied unchanged from `_coordination/review/supplementpacket-b1-verdicts.json` (review note `supplementpacket-b1-round3.md`; reviewer: 79 passed; 24 of 24 reviewer scripts pass; no new finding at blocker, major or regression level):
+
+| Finding | Reviewer verdict (round 3) |
+|---|---|
+| B1-001 | Closed |
+| B1-002 | Closed |
+| B1-003 | Closed, part open: a vendor-late draft row is free text, not tied to a repair order or packet, so two rows for one repair order (or a row for a repair order whose packet was also sent) count as separate qualifying packets; each raises condition (b) and joins condition (c)'s denominator without a document (8 sent with 7 documents is 87.5% and met; two late rows added by the vendor, even after the record was confirmed complete, make it 70% and not met). PM-1 still uses the current counts, not the day-7 values the refund test uses |
+| B1-004 | Closed, part open: the baseline rule is a lead ruling pending owner confirmation, labelled so in Decision 5.1, PRD 11, execution-plan UT-11 and verification 9.1/9.2; the owner has not confirmed it |
+| B1-005 | Closed |
+| B1-006 | Closed |
+| B1-007 | Closed |
+| B1-008 | Closed, part open: a bare number with no symbol or currency word ('storage 1500') is not detected; the limit is stated in verification section 9.1 |
+| B1-009 | Closed |
+| B1-010 | Closed |
+| B1-011 | Closed, part open: photo re-encoding and location-metadata removal (MH-05, T-4.2.1) not implemented; stated in section 9.1 |
+
+**Fixed after round-3 retest, lead-checked (lead instructions of 2026-11-11; not re-reviewed):**
+
+| Item | Change |
+|---|---|
+| B1-003 part, vendor-late drafts tied to a repair order | Each `vendor_late_drafts` row now names its repair order (`ro_id`, required, same location as the pilot) and optionally the packet frozen from the draft (`packet_id`, composite foreign key so it must be on that repair order); unique (`tenant_id`,`pilot_id`,`ro_id`), so a second row for one repair order, in any wording, is refused with 409 (migration `20261111_0004`). Qualifying units are one per repair order (`sp_core.pilot.qualifying_units`): a late draft for a repair order whose packet was sent in the window is listed but not counted again, and is flagged. Condition (b) and condition (c)'s denominator therefore count distinct late repair orders. Another tenant's repair order gives 404; a packet from another repair order gives 422. Regression tests: `unit/test_ledger_pilot.py::test_b1_003_round3_late_drafts_count_once_per_repair_order` and `integration/test_fix_round1.py::test_b1_003_round3_late_draft_counts_once_per_repair_order` (the reviewer's r3 and r5: 8 sent with 7 documents stays 7 of 8, 87.5%, met, after late rows for a sent repair order; reworded repeats give 409; one late repair order with no sent packet joins once, 7 of 9, per UT-11) |
+| B1-003 part, PM-1 counts | PM-1 reads R, S and N in force at the end of pilot day 90, its own reading time (gate C is read at day 90), from the count history, as condition (a) reads them at day 7. A change after day 90 (raised, lowered or cleared) does not move PM-1 and is flagged in `pm1_flags`; counts first supplied after day 90 make PM-1 not computable; a correction before day 90 counts. Two count events at the identical instant now resolve in recording order (reviewer note r2). Regression tests: `unit/test_ledger_pilot.py::test_b1_003_round3_pm1_uses_counts_in_force_at_day90`, `::test_b1_003_round3_same_instant_events_resolve_in_recording_order`, and `integration/test_fix_round1.py::test_b1_003_round3_pm1_uses_counts_in_force_at_day90_api` (the reviewer's r4) |
+
+Not changed: a late-draft row added after the vendor confirmed the record complete is still accepted and the confirmation stays (r5); B1-004 (owner confirmation), B1-008 (bare numbers) remain part open as recorded; B1-011 is addressed in B2 (section 10).
+
+**Final run (2026-11-11, test database dropped and re-migrated first):**
+
+| Check | Result |
+|---|---|
+| `make test` | 84 passed, 0 failed (32 unit, 52 integration) |
+| `make lint` | 0 findings, 62 files formatted |
+| `make typecheck` (mypy strict) | 0 issues in 50 files |
+| `make boundaries` | 0 violations |
+| `make heads` | 1 head (`20261111_0004`) |
+| `make parity` | 0 differences |

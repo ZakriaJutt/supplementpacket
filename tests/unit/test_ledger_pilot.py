@@ -26,7 +26,9 @@ from sp_core.pilot import (
     baseline_total,
     pm1_incremental_collected,
     pm2_checklist_collected,
+    qualifying_units,
     refund_test,
+    value_in_force,
 )
 
 START = date(2026, 9, 1)
@@ -332,3 +334,64 @@ def test_b1_003_round2_counts_changed_after_day7_use_deadline_value() -> None:
         late_drafts_recorded=True,
     )
     assert only_late.conditions[0].met is False and only_late.refund_due is False and only_late.refund_result == "not_due"
+
+
+# Fix after round-3 retest (B1-003 residue) -----------------------------------------------------------
+def _sent_eight(docs: int) -> list[PilotPacket]:
+    return [PilotPacket(f"p{i}", 10000, i < docs, True, ro_key=f"RO-{i}") for i in range(8)]
+
+
+def test_b1_003_round3_late_drafts_count_once_per_repair_order() -> None:
+    """Reviewer r3/r5: 8 sent with 7 documents (87.5%); late rows for already-counted or repeated ROs."""
+    rows = _rows([15000] * 30, 0)
+    base = refund_test(TERMS, COUNTS, rows, _sent_eight(7), **rec(COUNTS))
+    assert base.conditions[2].met is True and "7 of 8" in base.conditions[2].detail
+    # Two late rows for a repair order whose packet was sent in the window: that RO already counts.
+    on_sent = [PilotPacket(f"vendor-late-draft:{r}", 0, False, False, vendor_draft_late=True, ro_key="RO-0") for r in ("A", "a")]
+    same = refund_test(TERMS, COUNTS, rows, [*_sent_eight(7), *on_sent], **rec(COUNTS))
+    assert same.conditions[2].met is True and "7 of 8" in same.conditions[2].detail
+    assert len(same.counted_packet_ids) == 8 and any("not counted again" in f for f in same.flags)
+    # Two late rows for one repair order with no sent packet: one qualifying unit, not two (7 of 9, not 7 of 10).
+    repeated = [PilotPacket(f"vendor-late-draft:{r}", 0, False, False, vendor_draft_late=True, ro_key="RO-9") for r in ("X1", "x 1")]
+    once = refund_test(TERMS, COUNTS, rows, [*_sent_eight(7), *repeated], **rec(COUNTS))
+    assert "7 of 9" in once.conditions[2].detail and once.conditions[2].met is False  # UT-11 rule: a late RO joins once
+    assert "of which 1 vendor-late drafts" in once.conditions[1].detail
+    counted, dropped = qualifying_units([*_sent_eight(7), *repeated, *on_sent])
+    assert len(counted) == 9 and len(dropped) == 3
+
+
+def test_b1_003_round3_pm1_uses_counts_in_force_at_day90() -> None:
+    """Reviewer r4: PM-1 reads R, S and N in force at the end of day 90, its own reading time."""
+    rows = [BaselineRow(f"B{i:02d}", 10000, 1000, 1000, ON_TIME) for i in range(10)]
+    packets = [PilotPacket("p0", 0, True, True, collected_evidenced_cents_day90=2000, ro_key="RO-0")]
+    first = [
+        CountEvent("baseline_insurer_ro_count", 100, ON_TIME),
+        CountEvent("baseline_supplemented_ro_count", 12, ON_TIME),
+        CountEvent("window_insurer_ro_count", 40, ON_TIME),
+    ]
+    before_90 = datetime(2026, 10, 20, tzinfo=UTC)  # day 50: a correction before the reading counts
+    after_90 = datetime(2026, 12, 5, tzinfo=UTC)  # day 96 (day 90 ends 2026-11-29 Pacific)
+    in_force = pm1_incremental_collected(PilotCounts(100, 12, 40), rows, packets, terms=TERMS, count_history=first)
+    assert in_force.value_cents == 2000 - 4800  # 12000 / 100 x 40
+    assert not any("day 90" in f for f in in_force.flags)
+    corrected = [*first, CountEvent("baseline_supplemented_ro_count", 30, before_90)]
+    assert pm1_incremental_collected(PilotCounts(100, 30, 40), rows, packets, terms=TERMS, count_history=corrected).value_cents == (
+        2000 - 12000
+    )
+    for late_value, current in ((30, PilotCounts(100, 30, 40)), (5, PilotCounts(100, 5, 40)), (None, PilotCounts(100, None, 40))):
+        changed = [*first, CountEvent("baseline_supplemented_ro_count", late_value, after_90)]
+        late = pm1_incremental_collected(current, rows, packets, terms=TERMS, count_history=changed)
+        assert late.value_cents == 2000 - 4800, late_value
+        assert any("in force at the end of day 90" in f for f in late.flags)
+    supplied_late = [CountEvent(e.field, e.value, after_90) for e in first]
+    missing = pm1_incremental_collected(PilotCounts(100, 12, 40), rows, packets, terms=TERMS, count_history=supplied_late)
+    assert not missing.computable and missing.value_cents is None
+    with pytest.raises(ValueError):
+        pm1_incremental_collected(PilotCounts(100, 12, 40), rows, packets, count_history=first)
+
+
+def test_b1_003_round3_same_instant_events_resolve_in_recording_order() -> None:
+    """Reviewer r2 note: two events for one field at the identical instant; the later-recorded one wins."""
+    events = [CountEvent("baseline_supplemented_ro_count", 12, ON_TIME), CountEvent("baseline_supplemented_ro_count", 30, ON_TIME)]
+    assert value_in_force(events, "baseline_supplemented_ro_count", ON_TIME) == 30
+    assert value_in_force(events[::-1], "baseline_supplemented_ro_count", ON_TIME) == 12
