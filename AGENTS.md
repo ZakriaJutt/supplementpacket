@@ -2,7 +2,7 @@
 
 Canonical instructions for any agent or developer working in this repository. [CLAUDE.md](CLAUDE.md) adds product-specific guidance and defers to this file.
 
-**State of the repository:** build milestone B1 (foundation and deterministic core) implemented on branch `feat/b1-foundation`, not yet merged. The owner authorised implementation on 2026-11-11, before the Phase 0 sales gate G1 passed ([verification-report-fixing.md section 9](verification-report-fixing.md#9-build-milestone-b1-2026-11-11)). Python packages under `apps/` and `packages/`, four Alembic migrations, scripts and tests exist; there is no web frontend, no real provider integration and no deployment. Commands marked **exists** in [section 11](#11-utilities-index-b1) are implemented; every other command named in these documents is still **proposed**.
+**State of the repository:** build milestone B1 (foundation and deterministic core) on branch `feat/b1-foundation` and B2 (sign-in, SMTP email, S3 storage, all local) on branch `feat/b2-local-auth`, neither merged. The owner authorised implementation on 2026-11-11, before the Phase 0 sales gate G1 passed ([verification-report-fixing.md section 9](verification-report-fixing.md#9-build-milestone-b1-2026-11-11)). Python packages under `apps/` and `packages/`, five Alembic migrations, scripts and tests exist. Sign-in is password plus TOTP with server sessions; email goes through SMTP to the local Mailpit and files through the S3 API to the local MinIO ([verification section 10](verification-report-fixing.md#10-build-milestone-b2-2026-11-11)). There is no web frontend, no real provider account and no deployment. Commands marked **exists** in [section 11](#11-utilities-index-b1) are implemented; every other command named in these documents is still **proposed**.
 
 ## 1. Reading order
 
@@ -110,22 +110,27 @@ Search here before adding a helper (R-03). Each lives once; `scripts/check_bound
 | Job state machine | `packages/core/src/sp_core/jobs.py` | Compare-and-set on `state_version` |
 | Reference URL rule, photo attestation | `packages/core/src/sp_core/evidence.py` | AD-06 |
 | Logging, correlation, redaction | `packages/obs/src/sp_obs/__init__.py` | No web-framework import |
-| Object keys, stores, signed URLs, content sniffing | `packages/files/src/sp_files/__init__.py` | Key builder is the only way to make a key |
+| Object keys, stores, signed URLs, content sniffing | `packages/files/src/sp_files/__init__.py` | Key builder is the only way to make a key; `S3ObjectStore` (S3 API, MinIO locally) and `store_from_settings` choose the store for API and worker (B2) |
+| Photo metadata removal | `packages/files/src/sp_files/metadata.py` | `strip_metadata`: JPEG and PNG, standard library only; HEIC not supported (B2) |
+| Password hashing and policy, TOTP, tokens, secret encryption | `packages/core/src/sp_core/auth.py` | scrypt; RFC 6238; `hash_token`; AES-GCM under a key derived from `SESSION_KEY` (B2) |
+| Sign-in, sessions, invitations, password reset, throttle | `apps/api/src/sp_api/services/auth.py`, routes in `apps/api/src/sp_api/auth_routes.py` | Limits in the module docstring and TRD 8.2 (B2) |
+| Session cookie, anti-forgery token, origin check | `apps/api/src/sp_api/context.py` | `SESSION_COOKIE`, `csrf_token`, `check_csrf` (B2) |
+| Email (SMTP) | `apps/api/src/sp_api/mailer.py` | `SmtpMailer`; Mailpit locally, a provider by settings (B2) |
 | Packet renderer interface | `packages/files/src/sp_files/render.py` | Deterministic stand-in only in B1 |
 | Parser interface and registry | `packages/parsers/src/sp_parsers/__init__.py` | No real parser yet (T-3.1.3 blocked) |
 | ORM models, tenant transaction | `packages/db/src/sp_db/models.py`, `session.py` | `tenant_transaction` sets tenant, user, role and correlation ID |
-| Approval reset, immutability, append-only audit | Migrations `20261111_0001` to `20261111_0004` (SQL functions and triggers) | `sp_reset_line` is the one reset function; approver demotion resets approvals |
+| Approval reset, immutability, append-only audit | Migrations `20261111_0001` to `20261111_0005` (SQL functions and triggers) | `sp_reset_line` is the one reset function; approver demotion resets approvals |
 
 | Command | State | What it does |
 |---|---|---|
 | `make venv` | exists | Creates `.venv` with `tools/requirements.txt` and puts the source directories on its path |
-| `make dev` | exists | Bootstraps the role, migrates and seeds `supplementpacket_dev`, starts API (port 8103) and worker, waits for readiness; exits non-zero naming the unhealthy service. No Docker, MinIO, web or mail catcher in B1 |
+| `make dev` | exists | Bootstraps the role, migrates and seeds `supplementpacket_dev`, starts API (port 8103) and worker, waits for readiness; exits non-zero naming the unhealthy service. B2: also checks that MinIO storage (through `/readyz`) and the Mailpit SMTP port answer. No Docker or web |
 | `make stop` | exists | Stops the API and worker started by `make dev` |
-| `make test` | exists | Drops and re-migrates `supplementpacket_test`, runs every test |
+| `make test` | exists | Drops and re-migrates `supplementpacket_test`, runs every test. B2 tests use the local Mailpit and MinIO (credentials from `.env`) and skip, saying why, when either is not running |
 | `make lint`, `make typecheck` | exist | ruff (check and format) and mypy strict |
 | `scripts/check_boundaries.py` (`make boundaries`) | exists | Import rules and single-home helpers |
 | `scripts/check_migration_heads.py` (`make heads`) | exists | One linear history |
 | `scripts/orm_parity.py` (`make parity`) | exists | Migrated test database against ORM metadata, plus row-level security and trigger catalog check |
-| `scripts/seed_synthetic.py` | exists | Two synthetic tenants; tokens to `.run/dev-tokens.json` (untracked) |
+| `scripts/seed_synthetic.py` | exists | Two synthetic tenants; B2: fresh random passwords and authenticator secrets for the synthetic users in `.run/dev-credentials.json` (untracked, mode 600); no sessions are created |
 | `scripts/reset_db.sh` | exists | Resets one of this product's two databases only |
 | `scripts/run_backfill.py`, `restore_drill.sh`, `replay_deletions.py`, `load_parse.py`, `link_crawl.py` | proposed | Not in B1 |

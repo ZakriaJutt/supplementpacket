@@ -42,7 +42,7 @@ from sp_db.models import (
     RepairOrder,
     SupplementLine,
 )
-from sp_files import build_object_key, sha256_hex, sniff_type
+from sp_files import MetadataError, build_object_key, sha256_hex, sniff_type, strip_metadata
 
 __all__ = [
     "add_photos",
@@ -365,6 +365,18 @@ def add_photos(
             outcome.update(status="rejected", reason="larger than 15 MB")
             results.append(outcome)
             continue
+        if content_type == "image/heic":
+            # Location data cannot yet be removed from HEIC without an image library (B2; MH-05 gap).
+            outcome.update(status="rejected", reason="HEIC photos are not accepted yet; export the photo as JPEG")
+            results.append(outcome)
+            continue
+        try:
+            data, removed = strip_metadata(data, content_type)  # location and other metadata removed (B1-011)
+        except MetadataError:
+            outcome.update(status="rejected", reason="the image could not be read")
+            results.append(outcome)
+            continue
+        outcome["metadata_blocks_removed"] = removed
         digest = sha256_hex(data)
         photo = db.execute(select(Photo).where(Photo.ro_id == line.ro_id, Photo.sha256 == bytes.fromhex(digest))).scalar_one_or_none()
         if photo is None:

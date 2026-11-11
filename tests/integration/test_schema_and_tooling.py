@@ -76,7 +76,8 @@ def test_idempotency_key_reuse_with_other_body_is_refused(api: dict[str, Api], s
     other = owner.post("/ros", json={**body, "ro_number": "RO-IDEM-2"}, headers={"Idempotency-Key": "k-1"})
     assert first.status_code == again.status_code == 201 and first.json()["id"] == again.json()["id"]
     assert other.status_code == 422
-    missing = owner.client.post("/api/v1/ros", json=body, headers={"Authorization": f"Bearer {owner.token}"})
+    headers = {k: v for k, v in owner._headers(None, "POST").items() if k != "Idempotency-Key"}
+    missing = owner.client.post("/api/v1/ros", json=body, headers=headers)
     assert missing.status_code == 428
 
 

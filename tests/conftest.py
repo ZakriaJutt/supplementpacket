@@ -3,6 +3,10 @@
 The application and every isolation test connect as ``supplementpacket_app`` (no
 superuser, no BYPASSRLS). The owner connection is used only to seed fixtures that the
 product creates through vendor provisioning (tenants, users, sessions, grants, pilots).
+
+Sessions inserted here stand in for a completed sign-in (the B1 fake, kept in tests only);
+``Api`` sends them the way a browser does: the ``__Host-sp_session`` cookie plus the
+anti-forgery header. The real sign-in path is tested in ``integration/test_b2_auth.py``.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from sp_api.context import hash_token
+from sp_api.context import CSRF_HEADER, SESSION_COOKIE, csrf_token, hash_token
 from sp_api.main import create_app
 from sp_core.settings import Settings
 from sp_files import MemoryObjectStore
@@ -33,7 +37,14 @@ OWNER_URL = f"postgresql+psycopg://{getpass.getuser()}@localhost:5432/{DB}"
 TODAY = datetime.now(ZoneInfo("America/Los_Angeles")).date()
 PILOT_START = TODAY - timedelta(days=10)
 SYNTHETIC_PDF = b"%PDF-1.4\n% synthetic estimate for tests\n"
-JPEG = b"\xff\xd8\xff\xe0synthetic-jpeg-"
+# A structurally valid JPEG (SOI, JFIF APP0, start of scan); bytes appended to it land in the scan data.
+JPEG = (
+    b"\xff\xd8"
+    + b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    + b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
+    + b"synthetic-jpeg-"
+)
+TEST_SESSION_KEY = "test-session-key-not-secret"
 
 
 @pytest.fixture(scope="session")
@@ -44,7 +55,7 @@ def settings(tmp_path_factory: pytest.TempPathFactory) -> Settings:
         DATABASE_URL=APP_URL,
         MIGRATION_DATABASE_URL=OWNER_URL,
         STORAGE_BUCKET=str(root),
-        SESSION_KEY="test-session-key-not-secret",
+        SESSION_KEY=TEST_SESSION_KEY,
         WORKER_HEARTBEAT_PATH=str(root / "hb"),
         LOG_LEVEL="INFO",
     )  # type: ignore[call-arg]
@@ -74,7 +85,7 @@ def store() -> MemoryObjectStore:
 
 @pytest.fixture()
 def client(settings: Settings, store: MemoryObjectStore) -> TestClient:
-    return TestClient(create_app(settings, store), raise_server_exceptions=True)
+    return TestClient(create_app(settings, store), raise_server_exceptions=True, base_url="https://testserver")
 
 
 @dataclass
@@ -157,9 +168,10 @@ class Api:
         self.token = token
 
     def _headers(self, extra: dict[str, str] | None, method: str) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {self.token}"}
+        headers = {"Cookie": f"{SESSION_COOKIE}={self.token}"}
         if method != "GET":
             headers["Idempotency-Key"] = secrets.token_hex(12)
+            headers[CSRF_HEADER] = csrf_token(TEST_SESSION_KEY, hash_token(self.token))
         headers.update(extra or {})
         return headers
 

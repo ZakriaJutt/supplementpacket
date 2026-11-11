@@ -2,48 +2,70 @@
 
 TRD 8.1-8.3. Cross-tenant access returns 404 (RLS hides the row). A forbidden action on
 a visible row returns 403 and writes an audit event (IT-02).
+
+B2: the session is an opaque token in the ``__Host-sp_session`` cookie (Secure, HttpOnly,
+SameSite=Lax), checked server-side on every request against the 12-hour absolute and
+60-minute idle limits. A request that is not GET or HEAD also needs the ``X-CSRF-Token``
+header, an HMAC of the session under SESSION_KEY (ASVS 3.5.1), and a foreign Origin is
+refused. There is no bearer-token path: tests create sessions in the database directly.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from fastapi import Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from sp_core.auth import hash_token
 from sp_core.permissions import Action, Role, allowed
 from sp_core.settings import Settings
 from sp_db.session import global_transaction, tenant_transaction
 from sp_files import ObjectStore
 
+if TYPE_CHECKING:
+    from sp_api.mailer import Mailer
+
 __all__ = [
+    "CSRF_HEADER",
+    "SAFE_METHODS",
     "SESSION_COOKIE",
     "AppState",
     "Ctx",
     "Problem",
     "authenticate",
+    "check_csrf",
+    "check_origin",
+    "csrf_token",
     "hash_token",
+    "session_token",
 ]
 
-SESSION_COOKIE = "sp_session"
+SESSION_COOKIE = "__Host-sp_session"
+CSRF_HEADER = "X-CSRF-Token"
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 class Problem(Exception):
     """An RFC 9457 problem document."""
 
-    def __init__(self, status: int, title: str, detail: str | None = None, **extra: Any) -> None:
+    def __init__(self, status: int, title: str, detail: str | None = None, *, headers: dict[str, str] | None = None, **extra: Any) -> None:
         super().__init__(title)
         self.status = status
         self.title = title
         self.detail = detail
+        self.headers = headers or {}
         self.extra = extra
 
     def body(self) -> dict[str, Any]:
@@ -80,10 +102,37 @@ class StaleApprovals(Problem):
 class AppState:
     settings: Settings
     store: ObjectStore
+    mailer: Mailer
 
 
-def hash_token(token: str) -> bytes:
-    return hashlib.sha256(token.encode()).digest()
+def csrf_token(session_key: str, session_id: bytes) -> str:
+    """Anti-forgery token bound to one session: HMAC-SHA256 of its stored hash under SESSION_KEY."""
+    mac = hmac.new(session_key.encode(), b"csrf|" + session_id, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(mac).decode().rstrip("=")
+
+
+def session_token(request: Request) -> str | None:
+    return request.cookies.get(SESSION_COOKIE) or None
+
+
+def check_origin(request: Request, settings: Settings) -> None:
+    """A browser request from another origin is refused; requests without Origin are not browser forms."""
+    origin = request.headers.get("origin")
+    if origin is None or request.method in SAFE_METHODS:
+        return
+    expected = urlsplit(settings.public_base_url)
+    got = urlsplit(origin)
+    if (got.scheme, got.netloc) != (expected.scheme, expected.netloc):
+        raise Problem(403, "Forbidden", "cross-origin request refused")
+
+
+def check_csrf(request: Request, settings: Settings, session_id: bytes) -> None:
+    if request.method in SAFE_METHODS:
+        return
+    check_origin(request, settings)
+    sent = request.headers.get(CSRF_HEADER, "")
+    if not sent or not hmac.compare_digest(sent, csrf_token(settings.session_key, session_id)):
+        raise Problem(403, "Anti-forgery token missing or invalid", "reload the page and try again")
 
 
 @dataclass
@@ -93,6 +142,7 @@ class Ctx:
     tenant_id: uuid.UUID
     role: Role
     correlation_id: str
+    session_id: bytes = field(default=b"", repr=False)
     _db: Session | None = field(default=None, repr=False)
 
     @property
@@ -187,30 +237,28 @@ class Ctx:
             return status, body
 
 
-def _token_from(request: Request) -> str | None:
-    header = request.headers.get("authorization", "")
-    if header.lower().startswith("bearer "):
-        return header[7:].strip() or None
-    return request.cookies.get(SESSION_COOKIE)
-
-
 def authenticate(request: Request, state: AppState, correlation_id: str) -> Ctx:
     """Resolve the session to a user, a tenant and a role. No tenant role means 404 later."""
-    token = _token_from(request)
+    token = session_token(request)
     if not token:
         raise Problem(401, "Not signed in")
     now = datetime.now(UTC)
+    sid = hash_token(token)
+    idle_cut = now - timedelta(minutes=state.settings.session_idle_minutes)
     with global_transaction(state.settings.database_url) as db:
         row = db.execute(
             text(
                 "SELECT s.user_id, s.tenant_id, u.is_operator, u.status FROM sessions s JOIN users u ON u.id = s.user_id "
-                "WHERE s.id = :id AND s.revoked_at IS NULL AND s.expires_at > :now"
+                "WHERE s.id = :id AND s.revoked_at IS NULL AND s.expires_at > :now AND s.auth_level = 'full' "
+                "AND s.last_seen_at > :idle"
             ),
-            {"id": hash_token(token), "now": now},
+            {"id": sid, "now": now, "idle": idle_cut},
         ).first()
         if row is None:
-            raise Problem(401, "Not signed in")
-        db.execute(text("UPDATE sessions SET last_seen_at = :now WHERE id = :id"), {"id": hash_token(token), "now": now})
+            raise Problem(401, "Not signed in", "your session ended; sign in again")
+    check_csrf(request, state.settings, sid)
+    with global_transaction(state.settings.database_url) as db:
+        db.execute(text("UPDATE sessions SET last_seen_at = :now WHERE id = :id"), {"id": sid, "now": now})
     user_id, tenant_id, is_operator, status = row
     if status != "active" or tenant_id is None:
         raise Problem(401, "Not signed in")
@@ -229,4 +277,4 @@ def authenticate(request: Request, state: AppState, correlation_id: str) -> Ctx:
     if role is None or tenant_ok is None:
         # No access to this tenant at all: indistinguishable from a missing resource.
         raise Problem(404, "Not found")
-    return Ctx(state=state, user_id=user_id, tenant_id=tenant_id, role=role, correlation_id=correlation_id)
+    return Ctx(state=state, user_id=user_id, tenant_id=tenant_id, role=role, correlation_id=correlation_id, session_id=sid)

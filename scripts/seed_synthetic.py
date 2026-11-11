@@ -2,22 +2,25 @@
 
 Runs as the owner role because it stands in for vendor provisioning (tenant, location,
 Owner and pilot are created only by provisioning, MH-10). Idempotent: fixed UUIDs,
-upserts. Writes local session tokens to .run/dev-tokens.json (untracked). Synthetic
-data only: no real names, VINs, claim numbers or estimates.
+upserts. B2: no session is created here any more; each run sets a fresh random password
+and authenticator secret for every synthetic user and writes them to
+.run/dev-credentials.json (untracked, mode 600), so a developer signs in through the real
+password and TOTP path. Synthetic data only: no real names, VINs, claim numbers or estimates.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import secrets
 import sys
 import uuid
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import create_engine, text
+
+from sp_core.auth import derive_key, encrypt_secret, hash_password, new_totp_secret, totp_uri
 
 NS = uuid.UUID("6d1f3c2e-9a51-4b8e-8f00-5e0c1a2b3c4d")
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,9 +30,21 @@ def _id(*parts: str) -> uuid.UUID:
     return uuid.uuid5(NS, "/".join(parts))
 
 
-def seed(url: str) -> dict[str, dict[str, str]]:
+def _session_key() -> str:
+    key = os.environ.get("SESSION_KEY")
+    if not key:
+        for line in (ROOT / ".env").read_text().splitlines():
+            if line.startswith("SESSION_KEY="):
+                key = line.split("=", 1)[1].strip()
+    if not key:
+        raise SystemExit("SESSION_KEY is required (run `make env`)")
+    return key
+
+
+def seed(url: str) -> dict[str, dict[str, Any]]:
     engine = create_engine(url)
-    tokens: dict[str, dict[str, str]] = {}
+    totp_key = derive_key(_session_key(), "totp-secret")
+    tokens: dict[str, dict[str, Any]] = {}
     with engine.begin() as conn:
         cv = _id("checklist", "1")
         conn.execute(
@@ -62,23 +77,29 @@ def seed(url: str) -> dict[str, dict[str, str]]:
             tokens[label] = {"tenant_id": str(tenant), "location_id": str(location)}
             for role in ("owner", "estimator", "office"):
                 user = _id("user", label, role)
+                email = f"{role}.{label.lower()}@example.test"
+                password = secrets.token_urlsafe(18)
+                secret = new_totp_secret()
                 conn.execute(
                     text(
-                        "INSERT INTO users (id, email, password_hash) VALUES (:id, :e, 'login-not-implemented-in-b1') "
-                        "ON CONFLICT (id) DO NOTHING"
+                        "INSERT INTO users (id, email, display_name, password_hash, totp_secret_enc, totp_enabled_at, password_changed_at) "
+                        "VALUES (:id, :e, :n, :p, :s, now(), now()) ON CONFLICT (id) DO UPDATE SET password_hash = :p, "
+                        "totp_secret_enc = :s, totp_enabled_at = now(), totp_last_step = NULL, password_changed_at = now()"
                     ),
-                    {"id": user, "e": f"{role}.{label.lower()}@example.test"},
+                    {
+                        "id": user,
+                        "e": email,
+                        "n": f"Synthetic {role.title()} {label}",
+                        "p": hash_password(password),
+                        "s": encrypt_secret(totp_key, secret),
+                    },
                 )
                 conn.execute(
                     text("INSERT INTO memberships (tenant_id, user_id, role) VALUES (:t, :u, :r) ON CONFLICT DO NOTHING"),
                     {"t": tenant, "u": user, "r": role},
                 )
-                token = secrets.token_urlsafe(24)
-                conn.execute(
-                    text("INSERT INTO sessions (id, user_id, tenant_id, expires_at) VALUES (:id, :u, :t, :x)"),
-                    {"id": hashlib.sha256(token.encode()).digest(), "u": user, "t": tenant, "x": datetime.now(UTC) + timedelta(hours=12)},
-                )
-                tokens[label][role] = token
+                conn.execute(text("UPDATE sessions SET revoked_at = now() WHERE user_id = :u AND revoked_at IS NULL"), {"u": user})
+                tokens[label][role] = {"email": email, "password": password, "totp_secret": secret, "otpauth_uri": totp_uri(secret, email)}
             conn.execute(
                 text(
                     "INSERT INTO pilots (id, tenant_id, location_id, start_date, terms_version, created_by) "
@@ -96,12 +117,15 @@ def main() -> int:
     if not url:
         print("MIGRATION_DATABASE_URL is required", file=sys.stderr)
         return 2
-    tokens = seed(url)
-    out = ROOT / ".run" / "dev-tokens.json"
+    seeded = seed(url)
+    out = ROOT / ".run" / "dev-credentials.json"
     out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps(tokens, indent=2))
+    out.touch(mode=0o600)
+    out.write_text(json.dumps(seeded, indent=2))
     out.chmod(0o600)
-    print(f"seeded 2 synthetic tenants; session tokens in {out.relative_to(ROOT)} (untracked)")
+    stale = ROOT / ".run" / "dev-tokens.json"
+    stale.unlink(missing_ok=True)
+    print(f"seeded 2 synthetic tenants; sign-in credentials in {out.relative_to(ROOT)} (untracked)")
     return 0
 
 

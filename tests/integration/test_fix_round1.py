@@ -335,7 +335,7 @@ def test_b1_011_free_text_capped_and_notice_returned(api: dict[str, Api], shop: 
 
 # IT-03 concurrent variant (review note) ---------------------------------------------------------------
 def test_it03_concurrent_uploads_return_one_document(settings: Any, store: MemoryObjectStore, shop: Shop, owner_engine: Any) -> None:
-    client = TestClient(create_app(settings, store), raise_server_exceptions=False)
+    client = TestClient(create_app(settings, store), raise_server_exceptions=False, base_url="https://testserver")
     est = Api(client, shop.tokens["estimator"])
     for label, keys in (("same", ["k"] * 4), ("new", ["a", "b", "c", "d"])):
         ro = create_ro(est, shop)["id"]
@@ -347,7 +347,7 @@ def test_it03_concurrent_uploads_return_one_document(settings: Any, store: Memor
                 f"/api/v1/ros/{ro_id}/documents",
                 data={"purpose": "shop_estimate"},
                 files={"file": ("e.pdf", payload, "application/pdf")},
-                headers={"Authorization": f"Bearer {shop.tokens['estimator']}", "Idempotency-Key": f"{tag}-{key}-{ro_id}"},
+                headers={**est._headers(None, "POST"), "Idempotency-Key": f"{tag}-{key}-{ro_id}"},
             )
             sink.append((r.status_code, r.json().get("document", {}).get("id", r.text)))
 

@@ -15,11 +15,13 @@ from psycopg import errors as pg_errors
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
+from sp_api.auth_routes import router as auth_router
 from sp_api.context import AppState, PermissionDenied, Problem, StaleApprovals
+from sp_api.mailer import Mailer, SmtpMailer
 from sp_api.routes import router
 from sp_core.settings import Settings, get_settings
 from sp_db.session import get_engine
-from sp_files import LocalObjectStore, ObjectStore
+from sp_files import ObjectStore, store_from_settings
 from sp_obs import configure_logging, correlation_scope, get_logger
 
 __all__ = ["create_app"]
@@ -32,7 +34,7 @@ def _problem_response(problem: Problem, correlation_id: str | None) -> JSONRespo
     body = problem.body()
     if correlation_id:
         body["correlation_id"] = correlation_id
-    return JSONResponse(body, status_code=problem.status, media_type=PROBLEM)
+    return JSONResponse(body, status_code=problem.status, media_type=PROBLEM, headers=problem.headers or None)
 
 
 def _db_problem(exc: DBAPIError) -> Problem:
@@ -52,11 +54,11 @@ def _db_problem(exc: DBAPIError) -> Problem:
     return Problem(500, "Database error")
 
 
-def create_app(settings: Settings | None = None, store: ObjectStore | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, store: ObjectStore | None = None, mailer: Mailer | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
-    app = FastAPI(title="SupplementPacket API", version="0.1.0-b1", docs_url=None, redoc_url=None)
-    app.state.sp = AppState(settings=settings, store=store or LocalObjectStore(settings.storage_root()))
+    app = FastAPI(title="SupplementPacket API", version="0.2.0-b2", docs_url=None, redoc_url=None)
+    app.state.sp = AppState(settings=settings, store=store or store_from_settings(settings), mailer=mailer or SmtpMailer(settings))
     log.info("api starting", extra={"settings_fingerprint": settings.fingerprint()})
 
     @app.middleware("http")
@@ -73,6 +75,8 @@ def create_app(settings: Settings | None = None, store: ObjectStore | None = Non
             else:
                 response = await call_next(request)
             response.headers["X-Correlation-ID"] = correlation_id
+            response.headers.setdefault("Cache-Control", "no-store")
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
             route = request.scope.get("route")
             log.info(
                 "request",
@@ -110,7 +114,12 @@ def create_app(settings: Settings | None = None, store: ObjectStore | None = Non
                 conn.execute(text("SELECT 1 FROM alembic_version")).first()
         except Exception:  # noqa: BLE001 - readiness reports, never raises
             return JSONResponse({"status": "unavailable", "database": "down"}, status_code=503)
-        return {"status": "ready", "database": "up"}
+        try:
+            app.state.sp.store.exists("health/readyz-probe")  # bucket reachable with these credentials
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"status": "unavailable", "database": "up", "storage": "down"}, status_code=503)
+        return {"status": "ready", "database": "up", "storage": "up"}
 
+    app.include_router(auth_router, prefix="/api/v1")
     app.include_router(router, prefix="/api/v1")
     return app

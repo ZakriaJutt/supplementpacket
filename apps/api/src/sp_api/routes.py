@@ -16,11 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from sp_api.context import Ctx, Problem, authenticate
+from sp_api.services import auth, ledger, lines, packets, pilot
 from sp_api.services import documents as docs
-from sp_api.services import ledger, lines, packets, pilot
 from sp_api.services.common import get_or_404, parse_uuid, to_dict
 from sp_core.permissions import Action
-from sp_db.models import ChecklistItem, Document, EstimateLine, Job, Packet, Pilot, RepairOrder, SupplementLine
+from sp_db.models import ChecklistItem, Document, EstimateLine, Job, Packet, Photo, Pilot, RepairOrder, SupplementLine
 from sp_files import sha256_hex, sign_download_url, verify_download_signature
 
 router = APIRouter()
@@ -133,6 +133,31 @@ def get_document(document_id: str, ctx: Ctx = Depends(get_ctx)) -> dict[str, Any
         doc = get_or_404(db, Document, parse_uuid(document_id))
         run = docs.current_run(db, doc.id)
         return {"document": to_dict(doc, exclude=("storage_key",)), "parse_run": to_dict(run) if run else None}
+
+
+def _file_response(ctx: Ctx, key: str | None, content_type: str, name: str) -> RawResponse:
+    """Authorised download through the API (B2): the object store has no public URL."""
+    if key is None:
+        raise Problem(410, "File removed", "the file was removed by retention or a takedown")
+    return RawResponse(
+        ctx.state.store.get(key),
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "private, no-store"},
+    )
+
+
+@router.get("/documents/{document_id}/content")
+def document_content(document_id: str, ctx: Ctx = Depends(get_ctx)) -> RawResponse:
+    with ctx.tx() as db:
+        doc = get_or_404(db, Document, parse_uuid(document_id))
+        return _file_response(ctx, doc.storage_key, doc.content_type, f"{doc.purpose}-{doc.id}")
+
+
+@router.get("/photos/{photo_id}/content")
+def photo_content(photo_id: str, ctx: Ctx = Depends(get_ctx)) -> RawResponse:
+    with ctx.tx() as db:
+        photo = get_or_404(db, Photo, parse_uuid(photo_id))
+        return _file_response(ctx, photo.storage_key, photo.content_type, f"photo-{photo.id}")
 
 
 @router.get("/documents/{document_id}/lines")
@@ -515,3 +540,15 @@ def complete_vendor_late_drafts(
 def pilot_report(pilot_id: str, ctx: Ctx = Depends(get_ctx)) -> dict[str, Any]:
     with ctx.tx() as db:
         return pilot.pilot_report(db, parse_uuid(pilot_id))
+
+
+# Users and invitations (B2) -------------------------------------------------------------------
+@router.get("/users")
+def list_users(ctx: Ctx = Depends(get_ctx)) -> dict[str, Any]:
+    with ctx.tx() as db:
+        return auth.list_members(ctx, db)
+
+
+@router.post("/users")
+def invite_user(request: Request, body: JsonBody = Body(...), ctx: Ctx = Depends(get_ctx), key: str | None = IdemKey) -> JSONResponse:
+    return _mutate(ctx, request, key, body, lambda db: auth.create_invite(ctx, db, body), 201)

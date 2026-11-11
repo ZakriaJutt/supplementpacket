@@ -81,7 +81,12 @@ class User(Base):
     is_operator: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
-    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
+    totp_last_step: Mapped[int | None] = mapped_column(BigInteger)  # B2: a TOTP code is accepted once
+    password_changed_at: Mapped[datetime | None] = mapped_column(TS)
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_users_email"),
+        CheckConstraint("status IN ('active','disabled')", name="ck_users_status"),
+    )
 
 
 class Location(Base):
@@ -130,6 +135,62 @@ class Session(Base):
     last_seen_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(TS, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(TS)
+    auth_level: Mapped[str] = mapped_column(Text, nullable=False, server_default="full")  # B2
+    __table_args__ = (
+        CheckConstraint("auth_level IN ('password','full')", name="ck_sessions_auth_level"),
+        Index("ix_sessions_user", "user_id"),
+    )
+
+
+class Invite(Base):
+    """An invitation to join a tenant with one role; valid 72 hours, used once (B2, S-02)."""
+
+    __tablename__ = "invites"
+    id: Mapped[uuid.UUID] = _pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant()
+    email: Mapped[str] = mapped_column(CITEXT, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    totp_pending_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUIDT, ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(TS)
+    accepted_user_id: Mapped[uuid.UUID | None] = mapped_column(UUIDT, ForeignKey("users.id"))
+    __table_args__ = (
+        CheckConstraint("role IN ('owner','estimator','office')", name="ck_invites_role"),
+        CheckConstraint("expires_at <= created_at + interval '72 hours'", name="ck_invites_72h"),
+        UniqueConstraint("token_hash", name="uq_invites_token"),
+        Index("ix_invites_tenant", "tenant_id", text("created_at DESC")),
+    )
+
+
+class PasswordReset(Base):
+    """A password-reset link: valid 30 minutes, used once; recovery only, never a sign-in (B2)."""
+
+    __tablename__ = "password_resets"
+    id: Mapped[uuid.UUID] = _pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(UUIDT, ForeignKey("users.id"), nullable=False)
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(TS, nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(TS)
+    __table_args__ = (
+        CheckConstraint("expires_at <= created_at + interval '30 minutes'", name="ck_password_resets_30m"),
+        UniqueConstraint("token_hash", name="uq_password_resets_token"),
+        Index("ix_password_resets_user", "user_id"),
+    )
+
+
+class AuthThrottle(Base):
+    """One row per sign-in, code, reset or invitation attempt, for rate limits and lockout (B2)."""
+
+    __tablename__ = "auth_throttle"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    bucket: Mapped[str] = mapped_column(Text, nullable=False)
+    key_hash: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (Index("ix_auth_throttle_lookup", "bucket", "key_hash", "created_at"),)
 
 
 class Insurer(Base):

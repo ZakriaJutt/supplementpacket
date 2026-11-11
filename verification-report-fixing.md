@@ -397,3 +397,51 @@ Not changed: a late-draft row added after the vendor confirmed the record comple
 | `make boundaries` | 0 violations |
 | `make heads` | 1 head (`20261111_0004`) |
 | `make parity` | 0 differences |
+
+## 10. Build milestone B2 (2026-11-11)
+
+Owner request of 2026-11-11: build what needs no external account. Branch `feat/b2-local-auth`, created from the `feat/b1-foundation` commit that closes the round-3 item (section 9.3). Synthetic data only; no provider account, no deployment.
+
+**Tasks implemented.** T-2.2.2 (password plus TOTP, server sessions, invitations, password reset, lockout) in full for the API; T-2.2.3 in part (Owner invitations and the member list, `GET, POST /users`; vendor provisioning, Operator grants through the API and role changes are not built); T-2.2.5 in part (objects through the S3 API to MinIO, private bucket, authorised download endpoints); T-4.2.1 in part (location metadata removed from JPEG and PNG photos, B1-011). The B1 fake authentication is gone from the application: there is no bearer-token path, and the seed script writes sign-in credentials instead of sessions; only the test fixtures still insert sessions directly.
+
+**What was built** (details in TRD 8.2, 8.4 and 8.6; tables in schema section 3; migration `20261111_0005`):
+- Sign-in: `POST /auth/login` (password step) then `POST /auth/totp`; TOTP mandatory for Owner, Estimator and Operator, optional for Office; a new session token on every authentication; `__Host-sp_session` cookie (Secure, HttpOnly, SameSite=Lax, Path=/); 12-hour absolute and 60-minute idle timeout; logout, logout everywhere, `Clear-Site-Data`; disabled users stop at the next request; anti-forgery header on every state-changing request plus an Origin check; roles from the permission table, with `manage_users` added for the Owner.
+- Rate limits and lockout as in TRD 8.2 (429 with `Retry-After`); the lockout behaves the same for unknown emails.
+- Invitations (72 hours, once) and password reset (30 minutes, once, TOTP still required, every session ended, no sign-in) emailed through SMTP to Mailpit (`sp_api.mailer.SmtpMailer`; a provider later by settings only).
+- Files through the S3 API to MinIO (`sp_files.S3ObjectStore`, bucket `supplementpacket-dev`, region `us-east-1`) for the API and the worker; keys keep tenant, repair order and purpose (R-13); no public URL; downloads only through `GET /documents/{id}/content`, `GET /photos/{id}/content` (session, tenant-scoped) or the existing 5-minute signed packet link. Local credentials are in the untracked `.env`; `config/dev.env.example` holds the variable names only.
+- Photo metadata: Exif, XMP, IPTC and comments removed from JPEG, and text and Exif chunks from PNG, before hashing and storage (standard library, no re-encoding). HEIC is refused for now.
+- B1-011 (minor, author's status, not re-reviewed): location-metadata removal is now done for JPEG and PNG; photo re-encoding and HEIC cleaning remain open.
+- `make dev` also reports storage and mail healthy; seeded users sign in through the real path (checked by hand: login, TOTP, session, logout, then 401).
+
+**OWASP ASVS 5.0.0 requirements implemented** (IDs as the TRD cites them from SRC-21 and as read for this milestone; a reviewer should check each against the standard's text): 3.3.1, 3.3.2, 3.3.4 (cookie attributes and prefix); 3.5.1 (anti-forgery); 5.2.1, 5.2.2, 5.3.2 (size caps, type by content, generated keys; from B1, now on S3); 6.2.1, 6.2.5, 6.2.8, 6.2.9 (password length and handling); 6.3.1 (brute force and stuffing); 6.3.3 (MFA, except Office); 6.3.6 (email is not a factor); 6.3.8 (sign-in, lockout and reset answers do not reveal accounts); 6.4.1, 6.4.3 (invitation and reset secrets; reset keeps MFA); 6.5.1, 6.5.5 (TOTP once, defined lifetime); 7.2.1, 7.2.3, 7.2.4 (server-side random session tokens, new on authentication); 7.3.1, 7.3.2 (idle and absolute timeout); 7.4.1, 7.4.2, 7.4.3 (logout, disabled users, all sessions end after a reset); 11.4.2 (scrypt); 14.2.8 (photo metadata, JPEG and PNG); 14.3.1 (server part); 16.3.1 (authentication events logged, identifiers only).
+
+**Not implemented:** 6.2.2 (change password while signed in); 6.2.4 and 6.2.12 (only a short local list of common passwords; the breached-password service needs an outside call); 6.3.3 for the Office role (TOTP optional, as documented); 6.3.5 (notify the user of suspicious sign-ins); recovery when an authenticator is lost (no backup codes; the Owner re-invites); 7.4.5 and 7.5.2 (no endpoint to list or end another user's or one's own other sessions, apart from logout everywhere); 7.5.1 (no re-authentication step, as there is no sensitive-settings endpoint yet); 5.2.6 and photo re-encoding (need an image library); HEIC metadata removal; 5.4.3 (malware scan, accepted gap); 3.4 response headers beyond `nosniff` and `no-store` (no web client and no TLS yet); 12.x (TLS, deployment); 16.3.x authentication events in the tenant audit table (they go to the application log). OIDC and Google sign-in stay deferred (TRD 8.2, AD-11).
+
+**Tests added** (all ran):
+
+| Test | What it shows | Result |
+|---|---|---|
+| `integration/test_b2_auth.py::test_b2_invite_sign_in_logout_end_to_end` | Owner invites (Estimator cannot, 403); the link is read from Mailpit; TOTP set up and invitation accepted without signing in; password step alone reaches nothing (401); TOTP without the anti-forgery header refused (403); a new token after TOTP; cookie attributes; state change refused without the header and from a foreign Origin (403), accepted with it; logout ends the session server-side, the old cookie gets 401 | Pass |
+| `::test_b2_expired_and_reused_invite_and_code_refused` | Used invitation 410; expired invitation 410 with the S-02 message; unknown token 404; the TOTP step used at acceptance refused at sign-in; a code works once across two browsers | Pass |
+| `::test_b2_office_without_totp_and_weak_password_refused` | Common and short passwords 422; Office signs in without TOTP; an Estimator invitation without TOTP is refused | Pass |
+| `::test_b2_password_reset_needs_totp_ends_sessions_and_link_works_once` | Same answer for unknown and known emails; reset without the code 401; with it, password changed, every session ended, no cookie; link reused 410; old password 401; expired link 410 | Pass |
+| `::test_b2_cross_tenant_session_refused` | Signed in to A: B's repair order 404 and the list holds A only; sign-in naming tenant B 401; a session row pointed at B finds no membership (404) | Pass |
+| `::test_b2_rate_limit_and_lockout` | 5 failures lock the account (429, "Wait 15 minutes", `Retry-After: 900`) even for the right password; an unknown email locks the same way; sign-in requests per email limited | Pass |
+| `::test_b2_idle_and_absolute_expiry_and_disabled_user` | 61 idle minutes, a passed absolute expiry and a disabled user each give 401 | Pass |
+| `integration/test_b2_storage.py::test_b2_upload_download_one_tenant_refused_for_another` | Against MinIO: the PDF is in the bucket under `t/{tenant}/ro/{ro}/shop_estimate/{id}/`; downloaded by its tenant, 404 for the other, 403 for an anonymous request to the bucket; a JPEG with a GPS Exif segment is stored and served without it; objects deleted afterwards and the prefix checked empty | Pass |
+| `::test_b2_heic_refused_until_metadata_can_be_removed` | HEIC and an unreadable JPEG are refused per file with reasons | Pass |
+| `unit/test_b2_credentials_metadata.py` (5 tests) | scrypt hashing and policy; RFC 6238 appendix B vectors, drift, replay; AES-GCM round trip and key separation; JPEG and PNG metadata removal keeping image data byte for byte | Pass |
+
+Existing tests were moved from bearer tokens to the cookie plus anti-forgery header, and the synthetic JPEG fixture is now a structurally valid JPEG; IT-01 covers every new route with an identifier (unknown invitation tokens give 404). Mailpit messages read by the tests are deleted by ID afterwards; MinIO objects under the test tenants' prefixes are deleted and checked.
+
+**Final run (2026-11-11, test database dropped and re-migrated first; Mailpit and MinIO running):**
+
+| Check | Result |
+|---|---|
+| `make test` | 98 passed, 0 failed, 0 skipped (37 unit, 61 integration) |
+| `make lint` | 0 findings, 72 files formatted |
+| `make typecheck` (mypy strict) | 0 issues in 56 files |
+| `make boundaries` | 0 violations |
+| `make heads` | 1 head (`20261111_0005`) |
+| `make parity` | 0 differences |
+| `make dev`, then `make stop` | database, storage, mail, API and worker healthy; a seeded Estimator signed in with password and TOTP and signed out |

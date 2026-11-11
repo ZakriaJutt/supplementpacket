@@ -254,7 +254,7 @@ The chat's build figure is 160 hours, 20 days [C], for "two estimate PDFs → di
 | `scripts/check_boundaries.py` (exists, B1) | Enforce import rules | Source tree | List of violations | Non-zero if any |
 | `scripts/check_migration_heads.py` (exists, B1) | One linear migration history | Migrations folder | Head count | Non-zero if more than one |
 | `scripts/orm_parity.py` (exists, B1) | Compare migrated schema with ORM metadata | Migrated test database (B1; two scratch databases are not allowed on the build machine) | Diff | Non-zero on any difference |
-| `scripts/seed_synthetic.py` (exists, B1: tenants, users, sessions, pilot, a synthetic checklist; no ROs or PDFs) | Two synthetic tenants with ROs and PDFs | Seed number | Rows and files | Idempotent; safe to rerun |
+| `scripts/seed_synthetic.py` (exists, B1: tenants, users, pilot, a synthetic checklist; no ROs or PDFs; B2: sign-in credentials instead of sessions) | Two synthetic tenants with ROs and PDFs | Seed number | Rows and files | Idempotent; safe to rerun |
 | `scripts/run_backfill.py NAME` | Batched, resumable backfill | Backfill name | Progress row | Stops on error; rerun continues |
 | `scripts/restore_drill.sh` | Restore to a new instance and verify | Restore time | Row counts, hash check | Non-zero on mismatch; never touches production |
 | `scripts/replay_deletions.py` | Reapply deletions after a restore | Restore time | Purged tenants and objects | Resumable |

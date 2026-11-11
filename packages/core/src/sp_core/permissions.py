@@ -32,6 +32,7 @@ class Action(StrEnum):
     EDIT_BASELINE = "edit_baseline"
     TAKEDOWN = "takedown"
     RECORD_VENDOR_DRAFTS = "record_vendor_drafts"
+    MANAGE_USERS = "manage_users"  # invite, list members (B2)
 
 
 _ALL = frozenset(Role)
@@ -51,6 +52,7 @@ PERMISSIONS: dict[Action, frozenset[Role]] = {
     Action.EDIT_BASELINE: frozenset({Role.OWNER, Role.OFFICE}),
     Action.TAKEDOWN: frozenset({Role.OWNER}),
     Action.RECORD_VENDOR_DRAFTS: frozenset({Role.OPERATOR}),
+    Action.MANAGE_USERS: frozenset({Role.OWNER}),
 }
 
 

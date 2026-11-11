@@ -1,7 +1,7 @@
 """Local start command behind `make dev` (T-2.1.2, R-17, E2E-09 adapted).
 
-Docker is not available on this machine, so services run directly: PostgreSQL and
-Redis are the already-running local services; the API (uvicorn) and the worker are
+Docker is not available on this machine, so services run directly: PostgreSQL,
+Redis, MinIO (S3 API, B2) and Mailpit (SMTP, B2) are the already-running local services; the API (uvicorn) and the worker are
 started here in the background. Exits non-zero naming the unhealthy service.
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -72,13 +73,18 @@ def up() -> int:
     if not _alive("worker"):
         _start("worker", [str(PY), "-m", "sp_worker"], env)
     heartbeat = ROOT / env.get("WORKER_HEARTBEAT_PATH", ".run/worker.heartbeat")
-    status = {"database": False, "api": False, "worker": False}
+    status = {"database": False, "storage": False, "mail": False, "api": False, "worker": False}
     while time.monotonic() - started < TIMEOUT:
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/readyz", timeout=2) as resp:
-                status["api"] = status["database"] = resp.status == 200
+                status["api"] = status["database"] = status["storage"] = resp.status == 200
         except OSError:
             status["api"] = False
+        try:
+            with socket.create_connection((env.get("SMTP_HOST", "127.0.0.1"), int(env.get("SMTP_PORT", "1025"))), timeout=2):
+                status["mail"] = True
+        except OSError:
+            status["mail"] = False
         if heartbeat.exists():
             age = (datetime.now(UTC) - datetime.fromisoformat(heartbeat.read_text().strip())).total_seconds()
             status["worker"] = _alive("worker") and age < 10

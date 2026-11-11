@@ -59,6 +59,7 @@ def _build_b(api_b: Api, shop_b: Shop, owner_engine: Any) -> dict[str, str]:
         "packet_line_id": packet["lines"][0]["id"],
         "payment_id": pay.json()["id"],
         "pilot_id": str(shop_b.pilot_id),
+        "token": uuid.uuid4().hex,  # an invitation token nobody issued: 404 like any unknown id
     }
 
 

@@ -30,6 +30,24 @@ class Settings(BaseSettings):
     max_pdf_bytes: int = Field(default=26_214_400, alias="MAX_PDF_BYTES")
     max_photo_bytes: int = Field(default=15_728_640, alias="MAX_PHOTO_BYTES")
     job_lock_seconds: int = Field(default=120, alias="JOB_LOCK_SECONDS")
+    # Object storage (B2): S3 API, local MinIO in development; STORAGE_BUCKET is the bucket name for s3
+    # and a directory for the local test backend.
+    storage_backend: str = Field(default="local", alias="STORAGE_BACKEND")
+    s3_endpoint_url: str | None = Field(default=None, alias="S3_ENDPOINT_URL")
+    s3_region: str = Field(default="us-east-1", alias="S3_REGION")
+    s3_access_key_id: str | None = Field(default=None, alias="S3_ACCESS_KEY_ID", repr=False)
+    s3_secret_access_key: str | None = Field(default=None, alias="S3_SECRET_ACCESS_KEY", repr=False)
+    # Email (B2): SMTP; local Mailpit in development, a provider's SMTP relay later.
+    smtp_host: str = Field(default="127.0.0.1", alias="SMTP_HOST")
+    smtp_port: int = Field(default=1025, alias="SMTP_PORT")
+    smtp_from: str = Field(default="SupplementPacket <no-reply@supplementpacket.test>", alias="SMTP_FROM")
+    smtp_username: str | None = Field(default=None, alias="SMTP_USERNAME", repr=False)
+    smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD", repr=False)
+    smtp_starttls: bool = Field(default=False, alias="SMTP_STARTTLS")
+    smtp_timeout_seconds: float = Field(default=10.0, alias="SMTP_TIMEOUT_SECONDS")
+    # Sessions (TRD 8.2): 12-hour absolute and 60-minute idle timeout.
+    session_absolute_hours: int = Field(default=12, alias="SESSION_ABSOLUTE_HOURS")
+    session_idle_minutes: int = Field(default=60, alias="SESSION_IDLE_MINUTES")
 
     @field_validator("public_base_url")
     @classmethod
@@ -37,6 +55,13 @@ class Settings(BaseSettings):
         if not value.startswith(("https://", "http://")):
             raise ValueError("PUBLIC_BASE_URL must be an absolute http(s) URL")
         return value.rstrip("/")
+
+    @field_validator("storage_backend")
+    @classmethod
+    def _backend(cls, value: str) -> str:
+        if value not in ("s3", "local"):
+            raise ValueError("STORAGE_BACKEND must be s3 or local")
+        return value
 
     @field_validator("storage_bucket")
     @classmethod
@@ -47,7 +72,9 @@ class Settings(BaseSettings):
 
     def fingerprint(self) -> str:
         """Short hash of non-secret settings, logged at start by both processes (R-06)."""
-        public = self.model_dump(exclude={"session_key", "database_url", "migration_database_url"})
+        public = self.model_dump(
+            exclude={"session_key", "database_url", "migration_database_url", "s3_access_key_id", "s3_secret_access_key", "smtp_password"}
+        )
         text = "|".join(f"{k}={public[k]}" for k in sorted(public))
         return hashlib.sha256(text.encode()).hexdigest()[:12]
 
