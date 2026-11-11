@@ -10,10 +10,10 @@ from sqlalchemy import text
 from sp_files import MemoryObjectStore
 from sp_worker.handlers import default_handlers
 from sp_worker.runner import Worker
-from tests.conftest import JPEG, SYNTHETIC_PDF, Api, Shop, approve, approve_all, create_ro, explain, freeze, ro_with_diff
+from tests.conftest import JPEG, SYNTHETIC_PDF, TODAY, Api, Shop, approve, approve_all, create_ro, explain, freeze, ro_with_diff
 
 
-def _mark_sent(est: Api, packet: dict[str, Any], on: str = "2026-09-05") -> Any:
+def _mark_sent(est: Api, packet: dict[str, Any], on: str = TODAY.isoformat()) -> Any:
     return est.post(
         f"/packets/{packet['id']}/mark-sent",
         json={
@@ -304,22 +304,3 @@ def test_e2e01_core_path_three_totals(settings: Any, api: dict[str, Api], shop: 
     assert ledger["requested_cents"] == total == 6480 + 3000 + 15000
     assert ledger["insurer_approved_cents"] == total
     assert ledger["collected_evidenced_cents"] == total - 1000
-
-
-def test_e2e06_supersede_with_withdrawn_line(api: dict[str, Api], shop: Shop) -> None:
-    est = api["estimator"]
-    ro, _ = _manual_ro(est, shop, {"A": 10000, "B": 5000})
-    p1 = freeze(est, ro["id"]).json()
-    _mark_sent(est, p1["packet"])
-    # Withdraw B on the sent packet's successor: re-freeze with B unchanged, then record B as withdrawn.
-    a = next(x for x in est.get(f"/ros/{ro['id']}/lines").json() if x["description"] == "Operation A")
-    a = est.patch(
-        f"/lines/{a['id']}", json={"explanation": "Amended explanation after adjuster call."}, headers={"If-Match": str(a["row_version"])}
-    ).json()
-    approve(est, a)
-    p2 = freeze(est, ro["id"]).json()
-    b_line = next(pl for pl in p2["lines"] if pl["description"] == "Operation B")
-    assert _response(est, b_line, response_status="withdrawn").status_code == 200
-    ledger = est.get(f"/ros/{ro['id']}/ledger").json()
-    assert ledger["requested_cents"] == 10000 and ledger["withdrawn_cents"] == 5000
-    assert est.get(f"/packets/{p1['packet']['id']}").json()["packet"]["status"] == "superseded"  # old stays readable

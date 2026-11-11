@@ -13,8 +13,9 @@ import secrets
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,6 +30,8 @@ from sp_files import MemoryObjectStore
 DB = os.environ.get("SP_TEST_DB", "supplementpacket_test")
 APP_URL = f"postgresql+psycopg://supplementpacket_app@localhost:5432/{DB}"
 OWNER_URL = f"postgresql+psycopg://{getpass.getuser()}@localhost:5432/{DB}"
+TODAY = datetime.now(ZoneInfo("America/Los_Angeles")).date()
+PILOT_START = TODAY - timedelta(days=10)
 SYNTHETIC_PDF = b"%PDF-1.4\n% synthetic estimate for tests\n"
 JPEG = b"\xff\xd8\xff\xe0synthetic-jpeg-"
 
@@ -96,8 +99,15 @@ def _seed_shop(engine: Engine, label: str) -> Shop:
         for role in ("owner", "estimator", "office", "operator", "operator_nogrant"):
             uid = uuid.uuid4()
             conn.execute(
-                text("INSERT INTO users (id, email, password_hash, is_operator) VALUES (:id, :e, 'not-a-real-hash', :op)"),
-                {"id": uid, "e": f"{role}.{uid.hex[:8]}@example.test", "op": role.startswith("operator")},
+                text(
+                    "INSERT INTO users (id, email, display_name, password_hash, is_operator) VALUES (:id, :e, :n, 'not-a-real-hash', :op)"
+                ),
+                {
+                    "id": uid,
+                    "e": f"{role}.{uid.hex[:8]}@example.test",
+                    "n": f"Synthetic {role.title()} {label}",
+                    "op": role.startswith("operator"),
+                },
             )
             if role in ("owner", "estimator", "office"):
                 conn.execute(
@@ -123,7 +133,7 @@ def _seed_shop(engine: Engine, label: str) -> Shop:
                 "INSERT INTO pilots (id, tenant_id, location_id, start_date, terms_version, created_by) "
                 "VALUES (:id, :t, :l, :d, 'pilot-terms-v1', :op)"
             ),
-            {"id": pilot_id, "t": tenant_id, "l": location_id, "d": date(2026, 9, 1), "op": shop.users["operator"]},
+            {"id": pilot_id, "t": tenant_id, "l": location_id, "d": PILOT_START, "op": shop.users["operator"]},
         )
         shop.pilot_id = pilot_id
     return shop

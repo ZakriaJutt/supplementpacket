@@ -190,3 +190,17 @@ def test_ut19_email_draft_amount_rule_and_fingerprint() -> None:
     fp2 = review_fingerprint(review_components(lines, email_draft=second.text, recipient={"claim_number": None}))
     assert fp1 != fp2
     assert "claim" not in first.text  # a missing claim number is left out, never a placeholder
+
+
+def test_b1_008_email_guard_catches_trailing_symbols_and_spelled_amounts() -> None:
+    base = {"ro_number": "RO-1", "claim_number": None, "line_count": 1, "requested_total_cents": 128450}
+    for text in (
+        "We ask 1500$ for storage.",
+        "Storage is $ 1 500.",
+        "Add fifteen hundred dollars for storage.",
+        "Storage 1.500,00 USD",
+        "Two hundred bucks extra.",
+    ):
+        assert not build_email_draft(**base, free_paragraph=text).ok, text
+    for text in ("Total USD 1,284.50 as requested.", "The total is 1,284.50 USD.", "Photos attached for each line."):
+        assert build_email_draft(**base, free_paragraph=text).ok, text
